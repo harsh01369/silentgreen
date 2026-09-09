@@ -18,6 +18,7 @@
     "check": "tsc --noEmit",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "dev": "tsx src/cli.ts",
+    "prepare": "node build.mjs",
     "prepublishOnly": "npm run check && npm test && npm run build"
   },
   "keywords": [
