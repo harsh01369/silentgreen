@@ -52,16 +52,6 @@ function quantile(sorted: readonly number[], q: number): number {
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
 }
 
-/** Does the gap between two instants pass through a Saturday or Sunday? */
-function spansWeekend(aMs: number, bMs: number): boolean {
-  for (let t = aMs; t < bMs; t += 6 * HOUR * 1000) {
-    const d = new Date(t).getUTCDay();
-    if (d === 0 || d === 6) return true;
-  }
-  const d = new Date(bMs).getUTCDay();
-  return d === 0 || d === 6;
-}
-
 /**
  * Learn the rhythm a workflow actually keeps.
  *
@@ -85,29 +75,34 @@ export function inferCadence(runs: readonly Run[]): CadenceProfile | null {
     return d === 0 || d === 6;
   });
 
-  const allIntervals: number[] = [];
-  const weekdayIntervals: number[] = [];
-  for (let i = 1; i < starts.length; i++) {
-    const gap = (starts[i]! - starts[i - 1]!) / 1000;
-    if (gap <= 0) continue;
-    allIntervals.push(gap);
-    if (!spansWeekend(starts[i - 1]!, starts[i]!)) weekdayIntervals.push(gap);
-  }
-  if (allIntervals.length === 0) return null;
-
-  // When a workflow only runs on weekdays, weekend gaps are structure rather
-  // than incident, and including them would inflate the alarm threshold to the
-  // point of uselessness. Measure the rhythm on the days it actually works.
-  const basis = weekdaysOnly && weekdayIntervals.length >= 3 ? weekdayIntervals : allIntervals;
-  const sorted = [...basis].sort((a, b) => a - b);
-
-  const median = quantile(sorted, 0.5);
-  const p95 = quantile(sorted, 0.95);
-
+  // The working shape has to be established before the rhythm, because it
+  // decides which gaps are incidents and which are simply closing time.
   const hours = starts.map((t) => new Date(t).getUTCHours());
   const minHour = Math.min(...hours);
   const maxHour = Math.max(...hours);
   const activeHours = maxHour - minHour <= 14 && starts.length >= 10 ? { from: minHour, to: maxHour } : undefined;
+  const shape = { weekdaysOnly, activeHours };
+
+  const allIntervals: number[] = [];
+  const workingIntervals: number[] = [];
+  for (let i = 1; i < starts.length; i++) {
+    const gap = (starts[i]! - starts[i - 1]!) / 1000;
+    if (gap <= 0) continue;
+    allIntervals.push(gap);
+    // A gap that crosses a weekend or a night is structure, not rhythm. Leaving
+    // those in is what produces an expectation like "runs at least every 16
+    // hours" for a workflow that actually runs every hour, and an expectation
+    // that loose will not notice a full day of silence.
+    if (nonWorkingSeconds(starts[i - 1]!, starts[i]!, shape) === 0) workingIntervals.push(gap);
+  }
+  if (allIntervals.length === 0) return null;
+
+  const excludedStructuralGaps = allIntervals.length - workingIntervals.length;
+  const basis = workingIntervals.length >= 3 ? workingIntervals : allIntervals;
+  const sorted = [...basis].sort((a, b) => a - b);
+
+  const median = quantile(sorted, 0.5);
+  const p95 = quantile(sorted, 0.95);
 
   // Dispersion tells us whether this is a schedule or a webhook. A schedule is
   // tight; a webhook driven by human behaviour is not, and we should not
@@ -128,6 +123,12 @@ export function inferCadence(runs: readonly Run[]): CadenceProfile | null {
 
   if (weekdaysOnly) {
     reasoning += ' No run has ever started at a weekend, so weekend gaps are excluded from the rhythm rather than treated as incidents.';
+  }
+  if (activeHours) {
+    reasoning += ` Runs only ever start between ${String(activeHours.from).padStart(2, '0')}:00 and ${String(activeHours.to).padStart(2, '0')}:59, so overnight silence is expected too.`;
+  }
+  if (excludedStructuralGaps > 0) {
+    reasoning += ` ${excludedStructuralGaps} gap(s) that crossed non-working time were excluded from the calculation, which is what keeps the expectation tight enough to be useful.`;
   }
 
   return {
@@ -179,6 +180,12 @@ export interface CadenceContext {
    * outside them is expected rather than suspicious.
    */
   readonly activeHours?: { readonly from: number; readonly to: number };
+  /**
+   * The workflow's current revision. A cadence expectation is bound to a
+   * revision exactly like any other: a schedule confirmed against one graph
+   * says nothing about a graph that has since been rewired.
+   */
+  readonly currentWorkflowHash?: string;
 }
 
 /**
@@ -206,6 +213,13 @@ export function evaluateCadence(
   }
   if (assertion.params.kind !== 'cadence') {
     return { ...base, verdict: 'unproven', unprovenReason: 'assertion-not-applicable' };
+  }
+  if (
+    ctx.currentWorkflowHash &&
+    assertion.confirmation &&
+    assertion.confirmation.workflowHash !== ctx.currentWorkflowHash
+  ) {
+    return { ...base, verdict: 'unproven', unprovenReason: 'contract-stale' };
   }
 
   const starts = runs

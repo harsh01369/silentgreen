@@ -177,3 +177,24 @@ describe('humanise', () => {
     assert.equal(humanise(86400 * 3), '3.0 days');
   });
 });
+
+describe('a cadence expectation is bound to a revision like any other', () => {
+  test('a schedule confirmed against one graph says nothing about a rewired one', () => {
+    const runs = runsEvery(1, 10, Date.UTC(2026, 8, 1, 0, 0, 0));
+    const r = evaluateCadence(cadenceAssertion(3600, 1800), runs, {
+      now: new Date(Date.UTC(2026, 8, 9, 0, 0, 0)),
+      currentWorkflowHash: 'f'.repeat(64),
+    });
+    assert.equal(r.verdict, 'unproven');
+    assert.equal(r.unprovenReason, 'contract-stale');
+  });
+
+  test('the same check still fires when the revision matches', () => {
+    const runs = runsEvery(1, 10, Date.UTC(2026, 8, 1, 0, 0, 0));
+    const r = evaluateCadence(cadenceAssertion(3600, 1800), runs, {
+      now: new Date(Date.UTC(2026, 8, 9, 0, 0, 0)),
+      currentWorkflowHash: HASH,
+    });
+    assert.equal(r.verdict, 'violated');
+  });
+});

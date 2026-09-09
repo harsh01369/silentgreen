@@ -103,6 +103,30 @@ export function matchDegenerate(value: unknown, pattern: DegeneratePattern): boo
   }
 }
 
+/**
+ * How diagnostic a pattern is when several fire at once.
+ *
+ * An unrendered template names its own cause: an expression did not resolve. A
+ * null literal three fields along is usually the same incident seen downstream.
+ * Leading with the former sends someone to the right node.
+ */
+function severity(p: DegeneratePattern): number {
+  switch (p) {
+    case 'unrendered-template':
+      return 6;
+    case 'model-refusal':
+      return 5;
+    case 'error-text-in-value':
+      return 4;
+    case 'truncation-marker':
+      return 3;
+    case 'null-literal':
+      return 2;
+    case 'empty-string':
+      return 1;
+  }
+}
+
 export function describeDegenerate(pattern: DegeneratePattern): string {
   switch (pattern) {
     case 'empty-string':
@@ -219,22 +243,42 @@ export function evaluate(assertion: Assertion, run: Run, ctx: EvaluateContext = 
     }
 
     case 'not-degenerate': {
+      // Scan everything rather than stopping at the first hit. When one upstream
+      // rename breaks four fields at once, reporting whichever field happened to
+      // be checked first buries the most diagnostic finding. Here the worst
+      // problem leads and the rest are named alongside it.
+      const hits = new Map<string, { field: string; pattern: DegeneratePattern; value: unknown; itemIndex: number }>();
       for (let i = 0; i < items.length; i++) {
         for (const f of p.fields) {
           const { found, value } = fieldValue(items[i], f);
           if (!found) continue; // Absence is a shape concern, not a text concern.
           for (const pattern of p.patterns) {
+            const key = `${f}|${pattern}`;
+            if (hits.has(key)) continue;
             if (matchDegenerate(value, pattern)) {
-              return violated(
-                assertion,
-                `Item ${i}, field "${f}" ${describeDegenerate(pattern)}.`,
-                evidenceOf(value),
-              );
+              hits.set(key, { field: f, pattern, value, itemIndex: i });
             }
           }
         }
       }
-      return proven(assertion, `${items.length} item(s) checked against ${p.patterns.length} pattern(s)`);
+
+      if (hits.size === 0) {
+        return proven(assertion, `${items.length} item(s) checked against ${p.patterns.length} pattern(s)`);
+      }
+
+      const ranked = [...hits.values()].sort((a, b) => severity(b.pattern) - severity(a.pattern));
+      const lead = ranked[0]!;
+      const others = ranked.slice(1);
+      const also =
+        others.length > 0
+          ? ` Also affected in the same run: ${others.map((o) => `"${o.field}" (${o.pattern})`).join(', ')}.`
+          : '';
+
+      return violated(
+        assertion,
+        `Item ${lead.itemIndex}, field "${lead.field}" ${describeDegenerate(lead.pattern)}.${also}`,
+        evidenceOf(lead.value),
+      );
     }
 
     case 'referential': {
