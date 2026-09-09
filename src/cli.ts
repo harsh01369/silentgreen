@@ -11,7 +11,7 @@
  *   silentgreen status    what is in the store, in one screen
  */
 
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { audit, type AuditResult } from './audit';
 import { demoWorkflow, demoTimeline, platformSummary, DEMO_WORKFLOW_ID } from './demo/scenario';
 import { findSinks } from './contract/sinks';
@@ -27,6 +27,9 @@ import { serve } from './serve/server';
 import type { Assertion, AssertionResult, Run } from './contract/types';
 import { decideAlerts, worstPerAssertion } from './alert/state';
 import { channelsFromEnv, send, renderText, type Channel, type MessageContext } from './alert/notify';
+import { parseTaskRecords, type TaskRecord } from './aiwork/record';
+import { checkBatch } from './aiwork/check';
+import { demoTasks } from './aiwork/demo';
 
 try {
   process.loadEnvFile('.env');
@@ -243,6 +246,95 @@ function printFindings(result: AuditResult): void {
     if (g.evidence) console.log(`    ${c(C.blue, 'captured:')} ${g.evidence.slice(0, 150)}`);
     console.log('');
   }
+}
+
+/* ----------------------------------------------------------------- check -- */
+
+async function runCheck(path: string | undefined, rest: readonly string[]): Promise<void> {
+  let records: readonly TaskRecord[];
+  let issues: readonly { line: number; reason: string }[] = [];
+
+  if (!path || path === '--demo') {
+    records = demoTasks();
+    console.log(`
+${c(C.bold, 'silentgreen check')} ${c(C.dim, 'worked example')}
+
+Twenty answers from a support agent with the invoice in front of it. Every one
+was recorded as a completed task, and every one reads as helpful.
+`);
+  } else {
+    const text = readFileSync(path, 'utf8');
+    const parsed = parseTaskRecords(text);
+    records = parsed.records;
+    issues = parsed.issues;
+    console.log(`\n${records.length} task(s) read from ${path}.`);
+    if (issues.length > 0) {
+      console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
+      for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
+    }
+    if (records.length === 0) {
+      console.error(`
+Nothing to check. Each line should be a JSON object with an answer in it, for example:
+
+  {"id":"t1","input":"...","sources":["..."],"output":"..."}
+
+Field names are flexible: output/response/answer/completion, sources/context/documents.
+`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const { results, summary } = checkBatch(records, {
+    skipGrounding: rest.includes('--no-grounding'),
+  });
+
+  rule('What was found');
+  console.log(`  ${c(C.bold, summary.headline)}\n`);
+  console.log(`  clean         ${c(C.green, String(summary.clean))}`);
+  console.log(`  problems      ${c(C.red, String(summary.problematic))}`);
+  console.log(`  inconclusive  ${c(C.yellow, String(summary.inconclusive))}`);
+
+  const kinds: [keyof typeof summary.byKind, string][] = [
+    ['ungrounded', 'facts absent from the source material'],
+    ['degenerate', 'empty, unrendered or refused'],
+    ['deferred', 'handed the task back instead of doing it'],
+    ['duplicated', 'the same answer across different tasks'],
+  ];
+  console.log('');
+  for (const [k, label] of kinds) {
+    if (summary.byKind[k] > 0) console.log(`  ${String(summary.byKind[k]).padStart(3)}  ${label}`);
+  }
+
+  const bad = results.filter((r) => r.problems.length > 0);
+  if (bad.length > 0) {
+    rule(`The answers that would have shipped (${bad.length})`);
+    for (const r of bad.slice(0, 12)) {
+      console.log(`  ${c(C.red, 'x')} ${c(C.bold, r.id)}`);
+      for (const p of r.problems.slice(0, 4)) {
+        console.log(`    ${p.summary}`);
+      }
+      const first = r.problems[0];
+      if (first) console.log(`    ${c(C.blue, 'captured:')} ${first.evidence.replace(/\s+/g, ' ').slice(0, 140)}`);
+      console.log('');
+    }
+    if (bad.length > 12) console.log(c(C.dim, `  ...and ${bad.length - 12} more.\n`));
+  }
+
+  rule('What this did not check');
+  console.log(`  ${summary.caveat}`);
+
+  if (!path || path === '--demo') {
+    console.log(`
+${c(C.dim, 'Run it on your own:')}
+  silentgreen check tasks.jsonl
+
+${c(C.dim, 'One JSON object per line. Field names are flexible:')}
+  {"id":"t1","input":"...","sources":["..."],"output":"..."}
+`);
+  }
+
+  if (summary.problematic > 0) process.exitCode = 1;
 }
 
 /* ------------------------------------------------------------------ seed -- */
@@ -690,6 +782,8 @@ async function main(): Promise<void> {
   const storeDir = arg(rest, '--store') ?? STORE_DIR;
 
   switch (command) {
+    case 'check':
+      return runCheck(rest.find((r) => !r.startsWith('--')), rest);
     case 'demo':
       return runDemo();
     case 'seed':
@@ -722,7 +816,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     case '-h':
       console.log(`silentgreen
 
-  demo                     the worked example, printed. No credentials needed.
+  check [file.jsonl]       verify a batch of AI work. No credentials, no setup.
+  demo                     the n8n worked example, printed
   seed                     load that example into a local store
   scan                     read an n8n instance and propose expectations
   review [--port 4666]     open the review interface to confirm them

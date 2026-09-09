@@ -1,0 +1,275 @@
+/**
+ * Did the answer come from the source, or from the model?
+ *
+ * This is the check the rest of this market cannot make honestly, because the
+ * standard method is to ask another language model whether the answer looks
+ * right. That is marking homework with the same pen. The published numbers on
+ * it are not encouraging: judges score their own family's output higher, flip
+ * preference on about a quarter of hard cases under repeated scoring, and drop
+ * from roughly 80% agreement in a controlled test to worse than a coin flip on
+ * bias probes in production.
+ *
+ * So this asks a smaller question that has an actual answer. Not "is this good"
+ * but "does every checkable atom in the output appear in the material the model
+ * was given". Numbers, dates, money, emails, URLs, identifiers, quoted spans and
+ * capitalised names are all things that either occur in the source or do not.
+ * No model is consulted. The verdict is decided by the source text, which is why
+ * it can be trusted about a model.
+ *
+ * It is deliberately narrow. It cannot tell you an answer is wise, complete or
+ * well-judged. It can tell you the invoice total the agent quoted appears
+ * nowhere in the invoice, which is the failure that actually costs money.
+ *
+ * The bias runs hard towards silence. A false accusation that an AI fabricated
+ * something is worse than a miss, because the miss leaves you where you already
+ * were and the accusation makes this tool the problem.
+ */
+
+/** What kind of thing we found, so a report can say why it matters. */
+export type AtomKind = 'number' | 'money' | 'date' | 'email' | 'url' | 'identifier' | 'quote' | 'name';
+
+export interface Atom {
+  readonly kind: AtomKind;
+  readonly text: string;
+  /** Normalised for comparison. Two atoms match when these are equal. */
+  readonly key: string;
+}
+
+export interface UngroundedAtom extends Atom {
+  /** Written for somebody deciding whether this is a real fabrication. */
+  readonly why: string;
+}
+
+export interface GroundingResult {
+  readonly checked: number;
+  readonly ungrounded: readonly UngroundedAtom[];
+  /** True when there was too little to check for the answer to mean anything. */
+  readonly inconclusive: boolean;
+  readonly reason?: string;
+}
+
+/**
+ * Words that look like names because they are capitalised, and are not.
+ * Sentence starts, months, days and common openers produce most false positives,
+ * so they are excluded before anything is claimed.
+ */
+const NOT_NAMES = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'this', 'that', 'these', 'those',
+  'i', 'we', 'you', 'he', 'she', 'it', 'they', 'there', 'here', 'his', 'her', 'their',
+  'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september',
+  'october', 'november', 'december',
+  'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+  'yes', 'no', 'please', 'thanks', 'thank', 'hello', 'hi', 'dear', 'regards', 'sincerely',
+  'note', 'summary', 'total', 'subtotal', 'overview', 'introduction', 'conclusion',
+  'based', 'according', 'however', 'therefore', 'additionally', 'furthermore', 'finally',
+  'unfortunately', 'sorry', 'as', 'in', 'on', 'at', 'for', 'to', 'from', 'with', 'by',
+  'your', 'our', 'my', 'all', 'each', 'every', 'some', 'any', 'no', 'not',
+]);
+
+/** Numbers this small are ordinals and counts, not facts worth policing. */
+const TRIVIAL_NUMBER_MAX = 10;
+
+function normaliseNumber(s: string): string {
+  // 1,234.50 and 1234.5 and 1234.50 are the same number.
+  const cleaned = s.replace(/[,\s]/g, '');
+  const n = Number(cleaned.replace(/[^0-9.\-]/g, ''));
+  if (!Number.isFinite(n)) return cleaned.toLowerCase();
+  return String(n);
+}
+
+function normaliseText(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+const PATTERNS: ReadonlyArray<{ kind: AtomKind; re: RegExp }> = [
+  { kind: 'email', re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  { kind: 'url', re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
+  { kind: 'money', re: /(?:[$£€¥]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR))\b/g },
+  { kind: 'date', re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
+  // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
+  // be consumed in one match, or the tail is left behind and reported as a
+  // stray number, which points a reviewer at "9999" instead of at the invented
+  // invoice number it came from.
+  { kind: 'identifier', re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
+  { kind: 'number', re: /\b\d[\d,]*(?:\.\d+)?\b/g },
+  { kind: 'quote', re: /"([^"\n]{12,200})"/g },
+];
+
+/**
+ * Pull out the things in this text that are either true of the source or not.
+ *
+ * Order matters: an email is matched before the number inside it, so an address
+ * does not also produce three spurious number atoms.
+ */
+export function extractAtoms(text: string): readonly Atom[] {
+  if (!text) return [];
+  let remaining = text;
+  const atoms: Atom[] = [];
+  const seen = new Set<string>();
+
+  /**
+   * Sentence punctuation that a greedy pattern will happily swallow.
+   *
+   * "...at https://example.com/inv/1." captures the full stop, which then fails
+   * to match the source and reports a correct answer as an invented link. That
+   * single bug flagged fourteen faithful answers in the worked example, and a
+   * tool that does that in front of a user is finished.
+   */
+  const trimTrailingPunctuation = (s: string): string => s.replace(/[.,;:!?)\]}'"»]+$/, '');
+
+  const push = (kind: AtomKind, rawIn: string, keyIn: string) => {
+    let raw = rawIn;
+    let key = keyIn;
+    if (kind === 'url' || kind === 'email' || kind === 'identifier') {
+      raw = trimTrailingPunctuation(raw);
+      key = trimTrailingPunctuation(key);
+    }
+    if (!raw) return;
+    const id = `${kind}|${key}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    atoms.push({ kind, text: raw, key });
+  };
+
+  for (const { kind, re } of PATTERNS) {
+    const found: string[] = [];
+    for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
+      const raw = kind === 'quote' ? (m[1] ?? '') : m[0];
+      if (!raw) continue;
+      found.push(m[0]);
+
+      if (kind === 'number' || kind === 'money') {
+        const n = Number(normaliseNumber(raw));
+        // Small integers are counts and list positions, not claims.
+        if (kind === 'number' && Number.isFinite(n) && Math.abs(n) <= TRIVIAL_NUMBER_MAX && !raw.includes('.')) continue;
+        push(kind, raw, normaliseNumber(raw));
+      } else {
+        push(kind, raw, normaliseText(raw));
+      }
+    }
+    // Remove what we matched so later, broader patterns do not re-match inside it.
+    for (const f of found) remaining = remaining.split(f).join(' ');
+  }
+
+  // Capitalised runs, which is where invented people, companies and products live.
+  for (const m of remaining.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+    const raw = m[1] ?? '';
+    const words = raw.split(/\s+/);
+
+    if (words.length === 1) {
+      const w = words[0]!.toLowerCase();
+      if (NOT_NAMES.has(w) || w.length < 4) continue;
+      // A single capitalised word that opens a sentence is grammar, not a name.
+      // Without this, "Payment is due..." reports an invented entity called
+      // Payment, and one such accusation costs more trust than ten real catches
+      // earn. A name that matters will almost always also occur mid-sentence.
+      const before = remaining.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+      if (/(^|[.!?:;•\-])\s*$/.test(before) || /\n\s*$/.test(before)) continue;
+    } else if (words.every((w) => NOT_NAMES.has(w.toLowerCase()))) {
+      continue;
+    }
+    push('name', raw, normaliseText(raw));
+  }
+
+  return atoms;
+}
+
+/**
+ * Is this atom present in the source?
+ *
+ * Comparison is deliberately forgiving: normalised case and whitespace,
+ * number formatting ignored, and a quoted span counts as grounded if the source
+ * contains it with different punctuation or line breaks.
+ */
+function isPresent(atom: Atom, sourceRaw: string, sourceNormalised: string, sourceNumbers: ReadonlySet<string>): boolean {
+  switch (atom.kind) {
+    case 'number':
+    case 'money':
+      return sourceNumbers.has(atom.key);
+    case 'quote': {
+      // Punctuation inside a quotation is the model's business; the words are ours.
+      const words = atom.key.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      const src = sourceNormalised.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ');
+      return src.includes(words);
+    }
+    default:
+      return sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text);
+  }
+}
+
+function describe(atom: Atom): string {
+  switch (atom.kind) {
+    case 'money':
+      return 'a monetary amount that appears nowhere in the material the model was given';
+    case 'number':
+      return 'a figure that does not appear in the source';
+    case 'date':
+      return 'a date that does not appear in the source';
+    case 'email':
+      return 'an email address that does not appear in the source, which means it was either invented or carried in from somewhere else';
+    case 'url':
+      return 'a link that does not appear in the source, and invented links are among the most confidently produced things a model does';
+    case 'identifier':
+      return 'an identifier that does not appear in the source, so anything downstream keyed on it will not resolve';
+    case 'quote':
+      return 'a passage presented as a quotation that is not in the source';
+    case 'name':
+      return 'a proper name that does not appear in the source';
+  }
+}
+
+export interface GroundingOptions {
+  /** Kinds to check. Narrowing this is the main way to quieten a noisy corpus. */
+  readonly kinds?: readonly AtomKind[];
+  /** Below this many checkable atoms, we decline to conclude anything. */
+  readonly minAtoms?: number;
+}
+
+/**
+ * Check an answer against the material it was given.
+ *
+ * `sources` is everything the model could legitimately have drawn on: retrieved
+ * documents, the prompt, tool results, the record it was asked to summarise.
+ */
+export function checkGrounding(
+  output: string,
+  sources: readonly string[],
+  opts: GroundingOptions = {},
+): GroundingResult {
+  const kinds = new Set<AtomKind>(opts.kinds ?? ['money', 'identifier', 'email', 'url', 'date', 'quote', 'number', 'name']);
+  const minAtoms = opts.minAtoms ?? 1;
+
+  const sourceRaw = sources.join('\n');
+  if (sourceRaw.trim().length === 0) {
+    return {
+      checked: 0,
+      ungrounded: [],
+      inconclusive: true,
+      reason:
+        'No source material was captured for this task, so there is nothing to check the answer against. That is a gap in the evidence rather than a clean result.',
+    };
+  }
+
+  const sourceNormalised = normaliseText(sourceRaw);
+  const sourceNumbers = new Set<string>();
+  for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+
+  const atoms = extractAtoms(output).filter((a) => kinds.has(a.kind));
+  if (atoms.length < minAtoms) {
+    return {
+      checked: atoms.length,
+      ungrounded: [],
+      inconclusive: true,
+      reason: `The answer contains ${atoms.length} checkable fact(s), which is too few to conclude anything. Groundedness is a claim about specifics, and prose without specifics cannot be checked this way.`,
+    };
+  }
+
+  const ungrounded: UngroundedAtom[] = [];
+  for (const atom of atoms) {
+    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers)) {
+      ungrounded.push({ ...atom, why: describe(atom) });
+    }
+  }
+
+  return { checked: atoms.length, ungrounded, inconclusive: false };
+}

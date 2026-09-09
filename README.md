@@ -1,15 +1,92 @@
 # silentgreen
 
-**Your automation platform reports that the code ran. It cannot report whether the work happened.**
+**Verification for AI work, that never asks a model to grade a model.**
 
 ```
-npx github:harsh01369/silentgreen demo
+npx github:harsh01369/silentgreen check
 ```
 
-No account, no API key, no signup. That command runs a worked example against six weeks
-of execution history and prints what the platform saw next to what actually happened.
+No account, no API key, no signup. That runs a worked example over twenty answers from a
+support agent that had the invoice in front of it, and shows you the ones it invented.
 
 ---
+
+## Why not just use an LLM judge
+
+Because that is marking homework with the same pen, and the 2026 literature on it is not
+kind. Judges score their own family's output higher. Top-tier judges fail to hold a
+consistent preference on roughly a quarter of hard cases under repeated scoring. Agreement
+that looks like 80% in a controlled test collapses past 50% error on bias probes in
+production.
+
+From a 2026 post-mortem, describing the failure precisely:
+
+> agents "learned to produce confident-sounding but factually incorrect responses because
+> the evaluation framework couldn't distinguish between confident correctness and confident
+> fabrication."
+
+So silentgreen asks a smaller question that has an actual answer. Not *is this good*, but
+**does every checkable fact in the answer appear in the material the model was given**.
+Numbers, money, dates, emails, links, identifiers, quoted passages and proper names either
+occur in the source or they do not. No model is consulted, which is exactly why the verdict
+can be trusted about a model.
+
+It also catches what a scorer waves through: an unrendered template that shipped to a
+customer, a refusal carried downstream as content, an agent that hands every hard case back
+to a human and books it as resolved, and one answer returned for twenty different questions
+because the pipeline stopped reading its input.
+
+### On your own work
+
+```bash
+npx github:harsh01369/silentgreen check tasks.jsonl
+```
+
+One JSON object per line. Field names are flexible, because every tool in this space calls
+these things something different:
+
+```json
+{"id": "t1", "input": "...", "sources": ["..."], "output": "..."}
+```
+
+`output` / `response` / `answer` / `completion`, and `sources` / `context` / `documents` /
+`retrieved`. Documents may be strings or objects. Lines that cannot be read are reported
+rather than silently dropped, because a parser that quietly discards a third of the file and
+then reports no problems would be an unusually poor joke in this particular codebase.
+
+### What the worked example finds
+
+Twenty answers. Every one was recorded as a completed task, and every one reads as helpful.
+
+```
+  7 of 20 answers (35%) contain something the pipeline reported as a success.
+
+  clean         13
+  problems       7
+  inconclusive   0
+
+    4  facts absent from the source material
+    2  empty, unrendered or refused
+    1  handed the task back instead of doing it
+    3  the same answer across different tasks
+```
+
+Thirteen faithful answers, none of them accused. That ratio matters more than the catches:
+an early version of this flagged fourteen correct answers because the URL pattern swallowed
+the full stop at the end of a sentence. A tool that cries fabrication at correct work is
+finished on first contact with a user.
+
+### What it deliberately does not tell you
+
+Whether the answer is wise, complete or appropriate. A clean result is not a claim that the
+work was good. It is a narrower promise than the rest of this market makes, and it is one
+that can be kept.
+
+---
+
+## The same failure, in automations
+
+A workflow fails the way an answer does: it reports success, and the work did not happen.
 
 ## The problem, stated precisely
 
@@ -265,7 +342,7 @@ becomes `npx silentgreen`.
 
 ```bash
 npm install
-npm test          # 128 tests
+npm test          # 167 tests
 npm run check     # tsc --noEmit
 npx tsx src/cli.ts demo
 ```

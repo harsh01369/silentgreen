@@ -140,3 +140,46 @@ const data = {
 
 writeFileSync(new URL('./demo-data.js', import.meta.url), `window.SG = ${JSON.stringify(data, null, 2)};\n`, 'utf8');
 console.log(`site/demo-data.js written: ${cells.length} executions, ${data.findings.length} findings, ${verified.counts.violated} violations.`);
+
+/* ---- the AI work example, so the hero can show a real fabrication ---- */
+
+import { demoTasks } from '../src/aiwork/demo';
+import { checkBatch } from '../src/aiwork/check';
+import { groundingSourcesFor } from '../src/aiwork/record';
+import { checkGrounding } from '../src/verify/grounding';
+
+const tasks = demoTasks();
+const batch = checkBatch(tasks);
+
+const fabricated = tasks.find((t) => t.id === 'task-004')!;
+const fabricatedSources = groundingSourcesFor(fabricated).sources;
+const fabricatedGrounding = checkGrounding(fabricated.output, fabricatedSources);
+
+const aiData = {
+  total: batch.summary.total,
+  clean: batch.summary.clean,
+  problematic: batch.summary.problematic,
+  headline: batch.summary.headline,
+  caveat: batch.summary.caveat,
+  byKind: batch.summary.byKind,
+  fabricated: {
+    id: fabricated.id,
+    output: fabricated.output,
+    source: fabricatedSources.join('\n').trim(),
+    ungrounded: fabricatedGrounding.ungrounded.map((u) => ({ text: u.text, kind: u.kind, why: u.why })),
+  },
+  flagged: batch.results
+    .filter((r) => r.problems.length > 0)
+    .map((r) => ({
+      id: r.id,
+      output: (tasks.find((t) => t.id === r.id)?.output ?? '').slice(0, 220),
+      problems: r.problems.map((p) => ({ kind: p.kind, summary: p.summary, evidence: p.evidence.slice(0, 200) })),
+    })),
+};
+
+writeFileSync(
+  new URL('./ai-data.js', import.meta.url),
+  `window.SGAI = ${JSON.stringify(aiData, null, 2)};\n`,
+  'utf8',
+);
+console.log(`docs/ai-data.js written: ${aiData.total} tasks, ${aiData.problematic} flagged, ${aiData.fabricated.ungrounded.length} invented facts in the example.`);

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>silentgreen — every run green, nobody looked</title>
-<meta name="description" content="Your automation platform reports that the code ran. It cannot report whether the work happened. silentgreen verifies what your workflows actually produced, and says plainly when it cannot.">
+<title>silentgreen — verify AI work without asking an AI</title>
+<meta name="description" content="Everyone marks AI homework with AI. silentgreen checks whether an answer&apos;s facts appear in the material the model was given, and whether an automation actually did its job. No model grades a model.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -108,6 +108,25 @@
     font: 400 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; overflow-x: auto;
   }
 
+  /* ---------- ai hero ---------- */
+  .ai-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
+  .ai-pane { background: var(--panel); padding: 18px 20px 20px; min-width: 0; }
+  .ai-label { font-size: 12.5px; color: var(--ink-faint); margin-bottom: 9px; }
+  .ai-answer { font-size: 15.5px; line-height: 1.65; }
+  .ai-answer mark { background: transparent; color: inherit; padding: 0; transition: background-color .25s ease, color .25s ease; }
+  .ai-answer.showing mark { background: var(--red-bg); color: var(--red); font-weight: 600; box-shadow: inset 0 -2px 0 var(--red); }
+  .ai-source { margin: 0; font: 400 12.5px/1.6 var(--mono); color: var(--ink-soft); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--ground); border: 1px solid var(--rule-soft); padding: 12px 13px; }
+  .ai-verdict { margin: 14px 0 0; font-size: 15px; font-weight: 600; max-width: none; }
+  .ai-verdict.good { color: var(--green); }
+  .ai-verdict.bad { color: var(--red); }
+  .ai-found { padding: 16px 20px 20px; }
+  .ai-found[hidden] { display: none; }
+  .ai-found ul { margin: 0; padding: 0; list-style: none; }
+  .ai-found li { padding: 9px 0; border-bottom: 1px solid var(--rule-soft); font-size: 14.5px; color: var(--ink-soft); }
+  .ai-found li:last-child { border-bottom: 0; }
+  .ai-found li b { font-family: var(--mono); font-size: 13px; color: var(--red); font-weight: 500; }
+  .hero-after { margin: 22px 0 0; font-size: 16.5px; color: var(--ink-soft); max-width: 68ch; }
+  @media (max-width: 860px) { .ai-body { grid-template-columns: 1fr; } }
   /* ---------- sections ---------- */
   section { padding: 68px 0 0; }
   h2 { font-size: clamp(24px, 3vw, 33px); line-height: 1.12; letter-spacing: -0.025em; font-weight: 700; margin: 0 0 12px; max-width: 22ch; }
@@ -209,12 +228,55 @@
 </header>
 
 <div class="wrap hero">
-  <h1>Every run green. Nobody looked.</h1>
+  <h1>Nobody checked whether the AI did the job.</h1>
   <p class="sub">
-    Your automation platform can tell you that the code ran. It cannot tell you that the work
-    happened. Below are <strong>six weeks of real executions</strong> from an order sync.
-    The platform recorded every single one as a success.
+    The usual answer is to ask another model whether the answer looks right. That is marking
+    homework with the same pen, and the published numbers on it are grim.
+    <strong>silentgreen never asks a model to grade a model.</strong> It asks whether the
+    answer's facts appear in the material the model was given.
   </p>
+
+  <div class="console">
+    <div class="console-head">
+      <div>
+        <div class="wf-name">A support agent answering a billing question</div>
+        <div class="wf-meta">The invoice was retrieved and given to the model. The pipeline recorded this task as completed.</div>
+      </div>
+      <div class="switch" role="group" aria-label="Choose what to show">
+        <button id="btnAnswer" aria-pressed="true">The answer, as it shipped</button>
+        <button id="btnGrounded" aria-pressed="false">What the source actually contains</button>
+      </div>
+    </div>
+
+    <div class="ai-body">
+      <div class="ai-pane">
+        <div class="ai-label">The answer</div>
+        <div class="ai-answer" id="aiAnswer"></div>
+        <p class="ai-verdict" id="aiVerdict">&nbsp;</p>
+      </div>
+      <div class="ai-pane">
+        <div class="ai-label">The source it was given</div>
+        <pre class="ai-source" id="aiSource"></pre>
+      </div>
+    </div>
+
+    <div class="ai-found" id="aiFound" hidden></div>
+  </div>
+
+  <p class="hero-after">
+    Nothing about that answer's shape, tone or length is wrong. A model asked to grade it
+    would call it helpful, because it is helpful. It is also, in four places, invented.
+  </p>
+</div>
+
+<div class="wrap">
+  <section id="second-demo">
+    <h2>The same question, asked of an automation</h2>
+    <p class="sub" style="margin-bottom:30px">
+      An AI answer and a workflow run fail the same way: the thing reports success and the work
+      did not happen. Below are <strong>six weeks of real executions</strong> from an order sync.
+      The platform recorded every single one as a success.
+    </p>
 
   <div class="console">
     <div class="console-head">
@@ -252,6 +314,7 @@
       </div>
     </div>
   </div>
+  </section>
 </div>
 
 <div class="wrap">
@@ -438,7 +501,71 @@ npx github:harsh01369/silentgreen report --out record.html</pre>
 </div>
 
 <script src="demo-data.js"></script>
+<script src="ai-data.js"></script>
 <script>
+/* ---------- the AI hero: an answer, its source, and what it invented ---------- */
+(function () {
+  var ai = window.SGAI;
+  if (!ai) return;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  var answerEl = document.getElementById('aiAnswer');
+  var sourceEl = document.getElementById('aiSource');
+  var verdictEl = document.getElementById('aiVerdict');
+  var foundEl = document.getElementById('aiFound');
+  var btnAnswer = document.getElementById('btnAnswer');
+  var btnGrounded = document.getElementById('btnGrounded');
+  if (!answerEl || !btnAnswer) return;
+
+  sourceEl.textContent = ai.fabricated.source;
+
+  /* Wrap each invented fact in a mark. Longest first, via placeholders, so a
+     short atom sitting inside a longer one cannot split it. Everything is
+     escaped before it goes near innerHTML. */
+  var atoms = ai.fabricated.ungrounded.slice().sort(function (a, b) { return b.text.length - a.text.length; });
+  var html = esc(ai.fabricated.output);
+  atoms.forEach(function (a, i) {
+    var needle = esc(a.text);
+    var idx = html.indexOf(needle);
+    if (idx === -1) return;
+    html = html.slice(0, idx) + ' ' + i + ' ' + html.slice(idx + needle.length);
+  });
+  atoms.forEach(function (a, i) {
+    html = html.split(' ' + i + ' ').join('<mark>' + esc(a.text) + '</mark>');
+  });
+  answerEl.innerHTML = html;
+
+  foundEl.innerHTML =
+    '<ul>' +
+    atoms.map(function (a) { return '<li><b>' + esc(a.text) + '</b> &mdash; ' + esc(a.why) + '</li>'; }).join('') +
+    '</ul>';
+
+  function showAnswer() {
+    answerEl.classList.remove('showing');
+    verdictEl.className = 'ai-verdict good';
+    verdictEl.textContent = 'Recorded by the pipeline as: completed.';
+    foundEl.hidden = true;
+    btnAnswer.setAttribute('aria-pressed', 'true');
+    btnGrounded.setAttribute('aria-pressed', 'false');
+  }
+
+  function showGrounded() {
+    answerEl.classList.add('showing');
+    verdictEl.className = 'ai-verdict bad';
+    verdictEl.textContent = atoms.length + ' of the facts in this answer appear nowhere in the invoice it was given.';
+    foundEl.hidden = false;
+    btnAnswer.setAttribute('aria-pressed', 'false');
+    btnGrounded.setAttribute('aria-pressed', 'true');
+  }
+
+  btnAnswer.addEventListener('click', showAnswer);
+  btnGrounded.addEventListener('click', showGrounded);
+  showAnswer();
+})();
+
 (function () {
   var d = window.SG;
   if (!d) return;

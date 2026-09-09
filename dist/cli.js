@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { writeFileSync as writeFileSync2 } from "node:fs";
+import { readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 
 // src/verify/assert.ts
 var EVIDENCE_MAX = 300;
@@ -2676,6 +2676,498 @@ async function send(channels, action, ctx, opts = {}) {
   return results;
 }
 
+// src/aiwork/record.ts
+var INPUT_KEYS = ["input", "prompt", "question", "query", "task", "instruction", "request"];
+var OUTPUT_KEYS = ["output", "response", "answer", "completion", "result", "generation", "text"];
+var SOURCE_KEYS = ["sources", "context", "documents", "docs", "retrieved", "chunks", "evidence", "reference", "references", "ground_truth_context"];
+var ID_KEYS = ["id", "task_id", "trace_id", "run_id", "request_id", "uuid"];
+var TIME_KEYS = ["at", "timestamp", "time", "created_at", "started_at"];
+function firstString(obj, keys) {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim().length > 0) return v;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const inner = v;
+      for (const ik of ["text", "content", "value", "message"]) {
+        const iv = inner[ik];
+        if (typeof iv === "string" && iv.trim().length > 0) return iv;
+      }
+    }
+  }
+  return void 0;
+}
+function collectSources(obj) {
+  const out = [];
+  for (const k of SOURCE_KEYS) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) out.push(v);
+    else if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === "string" && item.trim()) out.push(item);
+        else if (item && typeof item === "object") {
+          const rec = item;
+          for (const ik of ["text", "content", "page_content", "body", "chunk", "value"]) {
+            const iv = rec[ik];
+            if (typeof iv === "string" && iv.trim()) {
+              out.push(iv);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+function parseTaskRecords(text) {
+  const records = [];
+  const issues = [];
+  const trimmed = text.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const arr = JSON.parse(trimmed);
+      arr.forEach((item, i) => {
+        const r = toRecord(item, i + 1, issues);
+        if (r) records.push(r);
+      });
+      return { records, issues };
+    } catch (err) {
+      return { records, issues: [{ line: 1, reason: `The file starts with "[" but is not valid JSON: ${String(err)}` }] };
+    }
+  }
+  const lines = trimmed.split("\n");
+  lines.forEach((line, i) => {
+    const l = line.trim();
+    if (!l) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(l);
+    } catch {
+      issues.push({ line: i + 1, reason: "Not valid JSON." });
+      return;
+    }
+    const r = toRecord(parsed, i + 1, issues);
+    if (r) records.push(r);
+  });
+  return { records, issues };
+}
+function toRecord(item, line, issues) {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    issues.push({ line, reason: "Not an object." });
+    return void 0;
+  }
+  const obj = item;
+  const output = firstString(obj, OUTPUT_KEYS);
+  if (!output) {
+    issues.push({
+      line,
+      reason: `No output found. Looked for: ${OUTPUT_KEYS.join(", ")}. Without an answer there is nothing to check.`
+    });
+    return void 0;
+  }
+  const input = firstString(obj, INPUT_KEYS) ?? "";
+  const sources = collectSources(obj);
+  const id = firstString(obj, ID_KEYS) ?? `line-${line}`;
+  const at = firstString(obj, TIME_KEYS);
+  return { id, at, input, sources, output, meta: obj };
+}
+function groundingSourcesFor(record) {
+  if (record.sources.length > 0) return { sources: record.sources };
+  if (record.input.trim().length > 0) {
+    return {
+      sources: [record.input],
+      note: "No retrieved sources were recorded, so the answer was checked against the prompt alone. Anything the model knew from training will read as ungrounded here, which is stricter than you may want."
+    };
+  }
+  return { sources: [], note: "Neither sources nor a prompt were recorded, so nothing could be checked." };
+}
+
+// src/aiwork/check.ts
+import { createHash as createHash3 } from "node:crypto";
+
+// src/verify/grounding.ts
+var NOT_NAMES = /* @__PURE__ */ new Set([
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "but",
+  "if",
+  "then",
+  "this",
+  "that",
+  "these",
+  "those",
+  "i",
+  "we",
+  "you",
+  "he",
+  "she",
+  "it",
+  "they",
+  "there",
+  "here",
+  "his",
+  "her",
+  "their",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "yes",
+  "no",
+  "please",
+  "thanks",
+  "thank",
+  "hello",
+  "hi",
+  "dear",
+  "regards",
+  "sincerely",
+  "note",
+  "summary",
+  "total",
+  "subtotal",
+  "overview",
+  "introduction",
+  "conclusion",
+  "based",
+  "according",
+  "however",
+  "therefore",
+  "additionally",
+  "furthermore",
+  "finally",
+  "unfortunately",
+  "sorry",
+  "as",
+  "in",
+  "on",
+  "at",
+  "for",
+  "to",
+  "from",
+  "with",
+  "by",
+  "your",
+  "our",
+  "my",
+  "all",
+  "each",
+  "every",
+  "some",
+  "any",
+  "no",
+  "not"
+]);
+var TRIVIAL_NUMBER_MAX = 10;
+function normaliseNumber(s) {
+  const cleaned = s.replace(/[,\s]/g, "");
+  const n = Number(cleaned.replace(/[^0-9.\-]/g, ""));
+  if (!Number.isFinite(n)) return cleaned.toLowerCase();
+  return String(n);
+}
+function normaliseText(s) {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+var PATTERNS = [
+  { kind: "email", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
+  { kind: "url", re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
+  { kind: "money", re: /(?:[$£€¥]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR))\b/g },
+  { kind: "date", re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
+  // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
+  // be consumed in one match, or the tail is left behind and reported as a
+  // stray number, which points a reviewer at "9999" instead of at the invented
+  // invoice number it came from.
+  { kind: "identifier", re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
+  { kind: "number", re: /\b\d[\d,]*(?:\.\d+)?\b/g },
+  { kind: "quote", re: /"([^"\n]{12,200})"/g }
+];
+function extractAtoms(text) {
+  if (!text) return [];
+  let remaining = text;
+  const atoms = [];
+  const seen = /* @__PURE__ */ new Set();
+  const trimTrailingPunctuation = (s) => s.replace(/[.,;:!?)\]}'"»]+$/, "");
+  const push = (kind, rawIn, keyIn) => {
+    let raw = rawIn;
+    let key = keyIn;
+    if (kind === "url" || kind === "email" || kind === "identifier") {
+      raw = trimTrailingPunctuation(raw);
+      key = trimTrailingPunctuation(key);
+    }
+    if (!raw) return;
+    const id = `${kind}|${key}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    atoms.push({ kind, text: raw, key });
+  };
+  for (const { kind, re } of PATTERNS) {
+    const found = [];
+    for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
+      const raw = kind === "quote" ? m[1] ?? "" : m[0];
+      if (!raw) continue;
+      found.push(m[0]);
+      if (kind === "number" || kind === "money") {
+        const n = Number(normaliseNumber(raw));
+        if (kind === "number" && Number.isFinite(n) && Math.abs(n) <= TRIVIAL_NUMBER_MAX && !raw.includes(".")) continue;
+        push(kind, raw, normaliseNumber(raw));
+      } else {
+        push(kind, raw, normaliseText(raw));
+      }
+    }
+    for (const f of found) remaining = remaining.split(f).join(" ");
+  }
+  for (const m of remaining.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+    const raw = m[1] ?? "";
+    const words = raw.split(/\s+/);
+    if (words.length === 1) {
+      const w = words[0].toLowerCase();
+      if (NOT_NAMES.has(w) || w.length < 4) continue;
+      const before = remaining.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+      if (/(^|[.!?:;•\-])\s*$/.test(before) || /\n\s*$/.test(before)) continue;
+    } else if (words.every((w) => NOT_NAMES.has(w.toLowerCase()))) {
+      continue;
+    }
+    push("name", raw, normaliseText(raw));
+  }
+  return atoms;
+}
+function isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers) {
+  switch (atom.kind) {
+    case "number":
+    case "money":
+      return sourceNumbers.has(atom.key);
+    case "quote": {
+      const words = atom.key.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+      const src = sourceNormalised.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ");
+      return src.includes(words);
+    }
+    default:
+      return sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text);
+  }
+}
+function describe2(atom) {
+  switch (atom.kind) {
+    case "money":
+      return "a monetary amount that appears nowhere in the material the model was given";
+    case "number":
+      return "a figure that does not appear in the source";
+    case "date":
+      return "a date that does not appear in the source";
+    case "email":
+      return "an email address that does not appear in the source, which means it was either invented or carried in from somewhere else";
+    case "url":
+      return "a link that does not appear in the source, and invented links are among the most confidently produced things a model does";
+    case "identifier":
+      return "an identifier that does not appear in the source, so anything downstream keyed on it will not resolve";
+    case "quote":
+      return "a passage presented as a quotation that is not in the source";
+    case "name":
+      return "a proper name that does not appear in the source";
+  }
+}
+function checkGrounding(output, sources, opts = {}) {
+  const kinds = new Set(opts.kinds ?? ["money", "identifier", "email", "url", "date", "quote", "number", "name"]);
+  const minAtoms = opts.minAtoms ?? 1;
+  const sourceRaw = sources.join("\n");
+  if (sourceRaw.trim().length === 0) {
+    return {
+      checked: 0,
+      ungrounded: [],
+      inconclusive: true,
+      reason: "No source material was captured for this task, so there is nothing to check the answer against. That is a gap in the evidence rather than a clean result."
+    };
+  }
+  const sourceNormalised = normaliseText(sourceRaw);
+  const sourceNumbers = /* @__PURE__ */ new Set();
+  for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  const atoms = extractAtoms(output).filter((a) => kinds.has(a.kind));
+  if (atoms.length < minAtoms) {
+    return {
+      checked: atoms.length,
+      ungrounded: [],
+      inconclusive: true,
+      reason: `The answer contains ${atoms.length} checkable fact(s), which is too few to conclude anything. Groundedness is a claim about specifics, and prose without specifics cannot be checked this way.`
+    };
+  }
+  const ungrounded = [];
+  for (const atom of atoms) {
+    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers)) {
+      ungrounded.push({ ...atom, why: describe2(atom) });
+    }
+  }
+  return { checked: atoms.length, ungrounded, inconclusive: false };
+}
+
+// src/aiwork/check.ts
+var DEGENERATE_PATTERNS = [
+  "empty-string",
+  "unrendered-template",
+  "model-refusal",
+  "error-text-in-value",
+  "null-literal"
+];
+var DEFERRAL_PATTERNS = [
+  /\b(?:please )?(?:contact|reach out to|speak to|get in touch with) (?:our |a |the )?(?:support|customer service|human|agent|representative|team)\b/i,
+  /\bI(?:'| a)m (?:going to |now )?(?:transfer|escalat|hand)(?:ring|ing)? (?:you |this )?(?:over |on )?to\b/i,
+  /\bescalat(?:ing|ed) (?:this |your )?(?:to|for) (?:a |the )?(?:human|agent|team|specialist)\b/i,
+  /\bI (?:cannot|can't|am unable to) (?:help|assist|answer|resolve)\b/i,
+  /\bthis (?:will be|has been) (?:passed|routed|forwarded) to\b/i
+];
+var DEFERRAL_MAX_CHARS = 400;
+function looksDeferred(output) {
+  const trimmed = output.trim();
+  if (trimmed.length === 0 || trimmed.length > DEFERRAL_MAX_CHARS) return { deferred: false };
+  for (const re of DEFERRAL_PATTERNS) {
+    const m = re.exec(trimmed);
+    if (m && (m.index ?? 0) < trimmed.length * 0.6) return { deferred: true, matched: m[0] };
+  }
+  return { deferred: false };
+}
+function fingerprint(s) {
+  return createHash3("sha256").update(s.toLowerCase().replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16);
+}
+function checkBatch(records, opts = {}) {
+  const duplicateThreshold = opts.duplicateThreshold ?? 3;
+  const counts = /* @__PURE__ */ new Map();
+  for (const r of records) {
+    const fp = fingerprint(r.output);
+    counts.set(fp, (counts.get(fp) ?? 0) + 1);
+  }
+  const results = [];
+  const byKind = { degenerate: 0, ungrounded: 0, deferred: 0, duplicated: 0 };
+  for (const record of records) {
+    const problems = [];
+    for (const pattern of DEGENERATE_PATTERNS) {
+      if (matchDegenerate(record.output, pattern)) {
+        problems.push({
+          kind: "degenerate",
+          summary: `The answer ${describeDegenerate(pattern)}.`,
+          evidence: record.output.slice(0, 300)
+        });
+        break;
+      }
+    }
+    const deferral = looksDeferred(record.output);
+    if (deferral.deferred) {
+      problems.push({
+        kind: "deferred",
+        summary: "The answer hands the task back rather than doing it. This counts as a completed task in most pipelines, which is how a high resolution rate can coexist with nothing being resolved.",
+        evidence: deferral.matched ?? record.output.slice(0, 200)
+      });
+    }
+    const dupCount = counts.get(fingerprint(record.output)) ?? 0;
+    if (dupCount >= duplicateThreshold && record.output.trim().length > 0) {
+      problems.push({
+        kind: "duplicated",
+        summary: `This exact answer was produced for ${dupCount} different tasks, which usually means the pipeline stopped reading its input.`,
+        evidence: record.output.slice(0, 200)
+      });
+    }
+    let inconclusive = false;
+    let inconclusiveReason;
+    let atomsChecked = 0;
+    if (!opts.skipGrounding) {
+      const { sources, note } = groundingSourcesFor(record);
+      const g = checkGrounding(record.output, sources, opts);
+      atomsChecked = g.checked;
+      if (g.inconclusive) {
+        inconclusive = problems.length === 0;
+        inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
+      } else {
+        for (const u of g.ungrounded) {
+          problems.push({
+            kind: "ungrounded",
+            summary: `"${u.text}" is ${u.why}.`,
+            evidence: u.text
+          });
+        }
+      }
+    }
+    for (const p of problems) byKind[p.kind] += 1;
+    results.push({
+      id: record.id,
+      at: record.at,
+      problems,
+      inconclusive,
+      inconclusiveReason,
+      atomsChecked
+    });
+  }
+  const problematic = results.filter((r) => r.problems.length > 0).length;
+  const inconclusiveCount = results.filter((r) => r.inconclusive).length;
+  const clean = results.length - problematic - inconclusiveCount;
+  const pct = results.length > 0 ? Math.round(problematic / results.length * 100) : 0;
+  const headline = problematic === 0 ? `${results.length} answers checked, none carrying a problem this can detect.` : `${problematic} of ${results.length} answers (${pct}%) contain something the pipeline reported as a success.`;
+  return {
+    results,
+    summary: {
+      total: results.length,
+      clean,
+      problematic,
+      inconclusive: inconclusiveCount,
+      byKind,
+      headline,
+      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+    }
+  };
+}
+
+// src/aiwork/demo.ts
+var INVOICE = (n, total, vat, due) => `
+Invoice INV-2026-${String(400 + n).padStart(4, "0")} for Fernweh Supply Ltd
+Issued 2026-08-${String(1 + n % 20).padStart(2, "0")}, due ${due}
+Billing contact: accounts@fernweh.example
+Subtotal ${total}
+VAT ${vat}
+Portal: https://billing.fernweh.example/inv/2026-${String(400 + n).padStart(4, "0")}
+`;
+function demoTasks() {
+  const out = [];
+  for (let i = 0; i < 20; i++) {
+    const total = `\xA3${(500 + i * 13).toFixed(2)}`;
+    const vat = `\xA3${((500 + i * 13) * 0.2).toFixed(2)}`;
+    const due = `2026-09-${String(1 + i % 25).padStart(2, "0")}`;
+    const source = INVOICE(i, total, vat, due);
+    const id = `task-${String(i + 1).padStart(3, "0")}`;
+    const at = new Date(Date.UTC(2026, 8, 1, 9 + i % 8, 0, 0)).toISOString();
+    const input = "The customer is asking what they owe and when it is due. Answer using the invoice provided.";
+    let output;
+    if (i === 3) {
+      output = `Your outstanding balance is \xA3742.60, including VAT of \xA3123.77, and it is due on 2026-09-30. If you need a copy, email finance@fernweh.example.`;
+    } else if (i === 7) {
+      output = `Hi {{ customer.first_name }}, your balance of {{ invoice.total }} is due on {{ invoice.due_date }}.`;
+    } else if (i === 11) {
+      output = `I'm sorry, but I cannot access billing information for this account.`;
+    } else if (i === 14) {
+      output = `Thanks for getting in touch. Please contact our support team and they will be able to help you with this.`;
+    } else if (i === 16 || i === 17 || i === 18) {
+      output = `Your invoice is available in the billing portal. Please log in to view the current balance and due date.`;
+    } else {
+      output = `Your subtotal is ${total} with VAT of ${vat}, due on ${due}. The invoice is INV-2026-${String(400 + i).padStart(4, "0")} and you can view it at https://billing.fernweh.example/inv/2026-${String(400 + i).padStart(4, "0")}.`;
+    }
+    out.push({ id, at, input, sources: [source], output });
+  }
+  return out;
+}
+
 // src/cli.ts
 try {
   process.loadEnvFile(".env");
@@ -2861,6 +3353,87 @@ function printFindings(result) {
     if (g.evidence) console.log(`    ${c(C.blue, "captured:")} ${g.evidence.slice(0, 150)}`);
     console.log("");
   }
+}
+async function runCheck(path, rest) {
+  let records;
+  let issues = [];
+  if (!path || path === "--demo") {
+    records = demoTasks();
+    console.log(`
+${c(C.bold, "silentgreen check")} ${c(C.dim, "worked example")}
+
+Twenty answers from a support agent with the invoice in front of it. Every one
+was recorded as a completed task, and every one reads as helpful.
+`);
+  } else {
+    const text = readFileSync3(path, "utf8");
+    const parsed = parseTaskRecords(text);
+    records = parsed.records;
+    issues = parsed.issues;
+    console.log(`
+${records.length} task(s) read from ${path}.`);
+    if (issues.length > 0) {
+      console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
+      for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
+    }
+    if (records.length === 0) {
+      console.error(`
+Nothing to check. Each line should be a JSON object with an answer in it, for example:
+
+  {"id":"t1","input":"...","sources":["..."],"output":"..."}
+
+Field names are flexible: output/response/answer/completion, sources/context/documents.
+`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+  const { results, summary } = checkBatch(records, {
+    skipGrounding: rest.includes("--no-grounding")
+  });
+  rule("What was found");
+  console.log(`  ${c(C.bold, summary.headline)}
+`);
+  console.log(`  clean         ${c(C.green, String(summary.clean))}`);
+  console.log(`  problems      ${c(C.red, String(summary.problematic))}`);
+  console.log(`  inconclusive  ${c(C.yellow, String(summary.inconclusive))}`);
+  const kinds = [
+    ["ungrounded", "facts absent from the source material"],
+    ["degenerate", "empty, unrendered or refused"],
+    ["deferred", "handed the task back instead of doing it"],
+    ["duplicated", "the same answer across different tasks"]
+  ];
+  console.log("");
+  for (const [k, label] of kinds) {
+    if (summary.byKind[k] > 0) console.log(`  ${String(summary.byKind[k]).padStart(3)}  ${label}`);
+  }
+  const bad = results.filter((r) => r.problems.length > 0);
+  if (bad.length > 0) {
+    rule(`The answers that would have shipped (${bad.length})`);
+    for (const r of bad.slice(0, 12)) {
+      console.log(`  ${c(C.red, "x")} ${c(C.bold, r.id)}`);
+      for (const p of r.problems.slice(0, 4)) {
+        console.log(`    ${p.summary}`);
+      }
+      const first = r.problems[0];
+      if (first) console.log(`    ${c(C.blue, "captured:")} ${first.evidence.replace(/\s+/g, " ").slice(0, 140)}`);
+      console.log("");
+    }
+    if (bad.length > 12) console.log(c(C.dim, `  ...and ${bad.length - 12} more.
+`));
+  }
+  rule("What this did not check");
+  console.log(`  ${summary.caveat}`);
+  if (!path || path === "--demo") {
+    console.log(`
+${c(C.dim, "Run it on your own:")}
+  silentgreen check tasks.jsonl
+
+${c(C.dim, "One JSON object per line. Field names are flexible:")}
+  {"id":"t1","input":"...","sources":["..."],"output":"..."}
+`);
+  }
+  if (summary.problematic > 0) process.exitCode = 1;
 }
 function runSeed(storeDir) {
   const doc = demoWorkflow(false);
@@ -3223,6 +3796,8 @@ async function main() {
   const [command = "demo", ...rest] = process.argv.slice(2);
   const storeDir = arg(rest, "--store") ?? STORE_DIR;
   switch (command) {
+    case "check":
+      return runCheck(rest.find((r) => !r.startsWith("--")), rest);
     case "demo":
       return runDemo();
     case "seed":
@@ -3254,7 +3829,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     case "-h":
       console.log(`silentgreen
 
-  demo                     the worked example, printed. No credentials needed.
+  check [file.jsonl]       verify a batch of AI work. No credentials, no setup.
+  demo                     the n8n worked example, printed
   seed                     load that example into a local store
   scan                     read an n8n instance and propose expectations
   review [--port 4666]     open the review interface to confirm them
