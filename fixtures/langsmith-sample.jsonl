@@ -1,0 +1,2 @@
+{"id":"r1","inputs":{"question":"What is owed on INV-5501?"},"outputs":{"output":"The balance is 539.00 GBP, due 2026-09-13."},"child_runs":[{"run_type":"retriever","outputs":{"documents":[{"page_content":"Invoice INV-5501 subtotal 539.00 GBP due 2026-09-13"}]}}]}
+{"id":"r2","inputs":{"question":"What is owed on INV-5502?"},"outputs":{"output":"The balance is 742.60 GBP."},"child_runs":[{"run_type":"retriever","outputs":{"documents":[{"page_content":"Invoice INV-5502 subtotal 552.00 GBP due 2026-09-20"}]}}]}

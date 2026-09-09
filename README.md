@@ -330,6 +330,24 @@ truth about your automations should not be able to become the reason they broke.
 Credentials are never read: the tool looks at which *credential type* a node uses, because
 swapping Postgres for Airtable is a change to the graph, and never at the credential itself.
 
+## In CI
+
+There is a GitHub Action. It runs `check` over an export and comments the result on the
+pull request, failing the job when an answer is flagged.
+
+```yaml
+- uses: harsh01369/silentgreen@main
+  with:
+    file: traces/*.jsonl        # a path or a glob
+    fail-on-problem: true       # set false to comment only
+```
+
+`check` itself takes one or more paths and expands `*`, `?` and `**`:
+
+```bash
+npx github:harsh01369/silentgreen check "traces/**/*.jsonl"
+```
+
 ## Install
 
 ```bash

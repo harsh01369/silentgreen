@@ -3,6 +3,53 @@
 // src/cli.ts
 import { readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "node:fs";
 
+// src/util/glob.ts
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+function segmentRegExp(seg) {
+  const body = seg.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${body}$`);
+}
+function readDir(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true }).map((e) => ({ name: e.name, isDir: e.isDirectory() }));
+  } catch {
+    return [];
+  }
+}
+function expandGlob(pattern) {
+  if (!/[*?]/.test(pattern)) return [pattern];
+  const parts = pattern.split(/[\\/]/);
+  const head = parts[0] ?? "";
+  let start;
+  if (head === "") start = "/";
+  else if (/^[A-Za-z]:$/.test(head)) start = head + "\\";
+  else start = head || ".";
+  let dirs = [start];
+  for (let i = 1; i < parts.length; i++) {
+    const seg = parts[i];
+    const isLast = i === parts.length - 1;
+    const next = [];
+    for (const d of dirs) {
+      if (seg === "**") {
+        const walk = (base) => {
+          next.push(base);
+          for (const e of readDir(base)) if (e.isDir) walk(join(base, e.name));
+        };
+        walk(d);
+        continue;
+      }
+      const re = segmentRegExp(seg);
+      for (const e of readDir(d)) {
+        if (!re.test(e.name)) continue;
+        if (isLast ? !e.isDir : e.isDir) next.push(join(d, e.name));
+      }
+    }
+    dirs = next;
+  }
+  return [...new Set(dirs)];
+}
+
 // src/verify/assert.ts
 var EVIDENCE_MAX = 300;
 function evidenceOf(v) {
@@ -1692,7 +1739,7 @@ function renderReport(input) {
 
 // src/store/store.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 var STORE_DIR = ".silentgreen";
 var STATE_FILE = "state.json";
 var LEDGER_FILE = "ledger.jsonl";
@@ -1705,7 +1752,7 @@ var Store = class {
   constructor(dir = STORE_DIR) {
     this.dir = dir;
     mkdirSync2(dir, { recursive: true });
-    const path = join(dir, STATE_FILE);
+    const path = join2(dir, STATE_FILE);
     if (existsSync2(path)) {
       try {
         this.state = JSON.parse(readFileSync2(path, "utf8"));
@@ -1721,12 +1768,12 @@ var Store = class {
     } else {
       this.state = emptyState();
     }
-    this.ledger = new Ledger(join(dir, LEDGER_FILE));
+    this.ledger = new Ledger(join2(dir, LEDGER_FILE));
   }
   state;
   ledger;
   save() {
-    const finalPath = join(this.dir, STATE_FILE);
+    const finalPath = join2(this.dir, STATE_FILE);
     const tmp = `${finalPath}.tmp`;
     writeFileSync(tmp, JSON.stringify(this.state, null, 2), "utf8");
     renameSync(tmp, finalPath);
@@ -4159,10 +4206,11 @@ function printFindings(result) {
     console.log("");
   }
 }
-async function runCheck(path, rest) {
+async function runCheck(paths, rest) {
   let records;
   let issues = [];
-  if (!path || path === "--demo") {
+  const files = paths.filter((p) => p !== "--demo");
+  if (files.length === 0) {
     records = demoTasks();
     console.log(`
 ${c(C.bold, "silentgreen check")} ${c(C.dim, "worked example")}
@@ -4171,12 +4219,25 @@ Twenty answers from a support agent with the invoice in front of it. Every one
 was recorded as a completed task, and every one reads as helpful.
 `);
   } else {
-    const text = readFileSync3(path, "utf8");
-    const parsed = parseTaskRecords(text);
-    records = parsed.records;
-    issues = parsed.issues;
+    const expanded = [...new Set(files.flatMap(expandGlob))];
+    if (expanded.length === 0) {
+      console.error(`
+No files matched: ${files.join(", ")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const all = [];
+    const allIssues = [];
+    for (const f of expanded) {
+      const parsed = parseTaskRecords(readFileSync3(f, "utf8"));
+      all.push(...parsed.records);
+      for (const i of parsed.issues) allIssues.push({ ...i, reason: `${f}: ${i.reason}` });
+    }
+    records = all;
+    issues = allIssues;
+    const where = expanded.length === 1 ? expanded[0] : `${expanded.length} files`;
     console.log(`
-${records.length} task(s) read from ${path}.`);
+${records.length} task(s) read from ${where}.`);
     if (issues.length > 0) {
       console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
       for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
@@ -4231,7 +4292,7 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
   }
   rule("What this did not check");
   console.log(`  ${summary.caveat}`);
-  if (!path || path === "--demo") {
+  if (files.length === 0) {
     console.log(`
 ${c(C.dim, "Run it on your own:")}
   silentgreen check tasks.jsonl
@@ -4666,7 +4727,7 @@ async function main() {
   const storeDir = arg(rest, "--store") ?? STORE_DIR;
   switch (command) {
     case "check":
-      return runCheck(rest.find((r) => !r.startsWith("--")), rest);
+      return runCheck(rest.filter((r) => !r.startsWith("--")), rest);
     case "eval":
       return runEval(rest);
     case "demo":
@@ -4700,7 +4761,7 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     case "-h":
       console.log(`silentgreen
 
-  check [file.jsonl]       verify a batch of AI work. No credentials, no setup.
+  check [files...]         verify a batch of AI work. Accepts globs. No setup.
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store

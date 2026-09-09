@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { expandGlob } from './util/glob';
 import { audit, type AuditResult } from './audit';
 import { demoWorkflow, demoTimeline, platformSummary, DEMO_WORKFLOW_ID } from './demo/scenario';
 import { findSinks } from './contract/sinks';
@@ -68,6 +69,7 @@ function arg(rest: readonly string[], flag: string): string | undefined {
   const i = rest.indexOf(flag);
   return i >= 0 ? rest[i + 1] : undefined;
 }
+
 
 /* ------------------------------------------------------------------ demo -- */
 
@@ -252,11 +254,13 @@ function printFindings(result: AuditResult): void {
 
 /* ----------------------------------------------------------------- check -- */
 
-async function runCheck(path: string | undefined, rest: readonly string[]): Promise<void> {
+async function runCheck(paths: readonly string[], rest: readonly string[]): Promise<void> {
   let records: readonly TaskRecord[];
   let issues: readonly { line: number; reason: string }[] = [];
 
-  if (!path || path === '--demo') {
+  const files = paths.filter((p) => p !== '--demo');
+
+  if (files.length === 0) {
     records = demoTasks();
     console.log(`
 ${c(C.bold, 'silentgreen check')} ${c(C.dim, 'worked example')}
@@ -265,11 +269,25 @@ Twenty answers from a support agent with the invoice in front of it. Every one
 was recorded as a completed task, and every one reads as helpful.
 `);
   } else {
-    const text = readFileSync(path, 'utf8');
-    const parsed = parseTaskRecords(text);
-    records = parsed.records;
-    issues = parsed.issues;
-    console.log(`\n${records.length} task(s) read from ${path}.`);
+    const expanded = [...new Set(files.flatMap(expandGlob))];
+    if (expanded.length === 0) {
+      console.error(`\nNo files matched: ${files.join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const all: TaskRecord[] = [];
+    const allIssues: { line: number; reason: string }[] = [];
+    for (const f of expanded) {
+      const parsed = parseTaskRecords(readFileSync(f, 'utf8'));
+      all.push(...parsed.records);
+      for (const i of parsed.issues) allIssues.push({ ...i, reason: `${f}: ${i.reason}` });
+    }
+    records = all;
+    issues = allIssues;
+
+    const where = expanded.length === 1 ? expanded[0] : `${expanded.length} files`;
+    console.log(`\n${records.length} task(s) read from ${where}.`);
     if (issues.length > 0) {
       console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
       for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
@@ -328,7 +346,7 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
   rule('What this did not check');
   console.log(`  ${summary.caveat}`);
 
-  if (!path || path === '--demo') {
+  if (files.length === 0) {
     console.log(`
 ${c(C.dim, 'Run it on your own:')}
   silentgreen check tasks.jsonl
@@ -855,7 +873,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'check':
-      return runCheck(rest.find((r) => !r.startsWith('--')), rest);
+      return runCheck(rest.filter((r) => !r.startsWith('--')), rest);
     case 'eval':
       return runEval(rest);
     case 'demo':
@@ -890,7 +908,7 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     case '-h':
       console.log(`silentgreen
 
-  check [file.jsonl]       verify a batch of AI work. No credentials, no setup.
+  check [files...]         verify a batch of AI work. Accepts globs. No setup.
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store

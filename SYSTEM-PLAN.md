@@ -408,7 +408,9 @@ real batches that neither the builder nor a fixture author wrote.
   words-to-number, currency-code normalisation, fuzzy name matching.
 - [open] Real reporting from `check`, leading with the coverage-honesty sentence.
 - [done] Importers: JSONL, JSON array, and LangSmith and Langfuse trace shapes unpacked automatically. CSV still to do.
-- [open] GitHub Action that runs `check` on a fixture set and comments on the PR.
+- [done] GitHub Action (`action.yml`) that runs `check` over a path or glob and comments
+  the result on the PR, failing the job when an answer is flagged. `check` now takes
+  multiple paths and expands `*`, `?` and `**`.
 - [open] Publish precision and recall on the golden corpus in the README.
 
 ### Phase 2: the hosted free tier

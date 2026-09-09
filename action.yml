@@ -1,0 +1,65 @@
+name: silentgreen check
+description: Verify a batch of recorded AI work, and comment the result on the pull request.
+author: harsh01369
+
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  file:
+    description: Path or glob of the JSONL/JSON export to check.
+    required: true
+  fail-on-problem:
+    description: Fail the job when any answer is flagged. Set to "false" to comment only.
+    required: false
+    default: 'true'
+  comment:
+    description: Post the summary as a pull-request comment.
+    required: false
+    default: 'true'
+  no-grounding:
+    description: Skip the groundedness check (for batches with no source material).
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SG_FILE: ${{ inputs.file }}
+        SG_FAIL: ${{ inputs.fail-on-problem }}
+        SG_COMMENT: ${{ inputs.comment }}
+        SG_NOGROUND: ${{ inputs.no-grounding }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        args=("$SG_FILE")
+        [ "$SG_NOGROUND" = "true" ] && args+=(--no-grounding)
+
+        set +e
+        out="$(npx --yes github:harsh01369/silentgreen check "${args[@]}" 2>&1)"
+        code=$?
+        set -e
+
+        echo "$out"
+
+        if [ "$SG_COMMENT" = "true" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && \
+           [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+          {
+            echo '### silentgreen check'
+            echo
+            echo '```'
+            echo "$out" | sed -e 's/\x1b\[[0-9;]*m//g'
+            echo '```'
+          } > "$RUNNER_TEMP/sg-comment.md"
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file "$RUNNER_TEMP/sg-comment.md" || echo "could not post comment"
+        fi
+
+        if [ "$SG_FAIL" = "true" ] && [ "$code" -ne 0 ]; then
+          echo "::error::silentgreen flagged one or more answers"
+          exit "$code"
+        fi
