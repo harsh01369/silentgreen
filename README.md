@@ -3,7 +3,7 @@
 **Your automation platform reports that the code ran. It cannot report whether the work happened.**
 
 ```
-npx silentgreen demo
+npx github:harsh01369/silentgreen demo
 ```
 
 No account, no API key, no signup. That command runs a worked example against six weeks
@@ -153,7 +153,7 @@ Nothing turned green, and nothing kept accusing.
 ```bash
 export N8N_URL=https://your-n8n.example
 export N8N_API_KEY=n8n_api_...        # Settings, n8n API. Read access is enough.
-npx silentgreen scan
+npx github:harsh01369/silentgreen scan
 ```
 
 `scan` reads your workflows and recent executions, works out where output leaves the
@@ -170,11 +170,13 @@ swapping Postgres for Airtable is a change to the graph, and never at the creden
 ## Install
 
 ```bash
-npx silentgreen demo          # nothing to install
-npm i -g silentgreen          # or keep it around
+npx github:harsh01369/silentgreen demo    # nothing to install
 ```
 
-Node 20 or newer.
+Node 20 or newer. Installing from git rather than the registry for now, because the
+package is not published yet and pointing you at a name that does not resolve would be a
+poor first impression from a tool about unverified claims. When it lands on npm this
+becomes `npx silentgreen`.
 
 ## What this does not do
 
