@@ -415,6 +415,13 @@ real batches that neither the builder nor a fixture author wrote.
 
 ### Phase 2: the hosted free tier
 
+**Status.** apps/api scaffolded (Express, Drizzle, Better Auth, ingest, ledger)
+and apps/web scaffolded (Next.js, the marketing site with a 3D hero, the
+session-gated dashboard with org/project/key creation). Both typecheck and
+build. Not yet deployed: needs a live Neon URL and the Railway and Vercel
+projects. The task inspector and session-auth batch drill-down are the next
+build items.
+
 **Infrastructure, decided.**
 
 | piece | choice | why |
