@@ -2676,6 +2676,112 @@ async function send(channels, action, ctx, opts = {}) {
   return results;
 }
 
+// src/aiwork/adapters.ts
+var isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var str2 = (v) => typeof v === "string" && v.trim() ? v : void 0;
+function messageText(v) {
+  if (typeof v === "string") return v.trim() || void 0;
+  if (Array.isArray(v)) {
+    const parts = v.map((p) => isObj(p) ? str2(p.text) ?? str2(p.content) : str2(p)).filter(Boolean);
+    if (parts.length) return parts.join("\n");
+    return void 0;
+  }
+  if (isObj(v)) {
+    if (isObj(v.kwargs)) return messageText(v.kwargs.content) ?? messageText(v.kwargs);
+    return messageText(v.content) ?? str2(v.text) ?? str2(v.value);
+  }
+  return void 0;
+}
+function lastMessage(v) {
+  let list = v;
+  if (Array.isArray(list) && list.length === 1 && Array.isArray(list[0])) list = list[0];
+  if (!Array.isArray(list) || list.length === 0) return void 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const t = messageText(list[i]);
+    if (t) return t;
+  }
+  return void 0;
+}
+function pickOutput(o) {
+  const out = o.outputs ?? o.output;
+  if (str2(out)) return str2(out);
+  if (isObj(out)) {
+    const gens = out.generations;
+    if (Array.isArray(gens)) {
+      const flat = Array.isArray(gens[0]) ? gens[0] : gens;
+      const first = flat[0];
+      if (isObj(first)) {
+        const t = str2(first.text) ?? messageText(first.message) ?? messageText(first);
+        if (t) return t;
+      }
+    }
+    return str2(out.output) ?? messageText(out.output) ?? str2(out.answer) ?? str2(out.result) ?? str2(out.text) ?? str2(out.content) ?? messageText(out.content) ?? lastMessage(out.messages);
+  }
+  return void 0;
+}
+function pickInput(o) {
+  const inp = o.inputs ?? o.input;
+  if (str2(inp)) return str2(inp);
+  if (isObj(inp)) {
+    return str2(inp.input) ?? str2(inp.question) ?? str2(inp.query) ?? str2(inp.prompt) ?? str2(inp.text) ?? lastMessage(inp.messages) ?? lastMessage(inp.chat_history);
+  }
+  return void 0;
+}
+function documentsFrom(v) {
+  const out = [];
+  const push = (d) => {
+    if (typeof d === "string" && d.trim()) out.push(d);
+    else if (isObj(d)) {
+      const t = str2(d.page_content) ?? str2(d.pageContent) ?? str2(d.text) ?? str2(d.content) ?? str2(d.chunk) ?? str2(d.body);
+      if (t) out.push(t);
+    }
+  };
+  if (Array.isArray(v)) v.forEach(push);
+  else if (isObj(v) && Array.isArray(v.documents)) v.documents.forEach(push);
+  return out;
+}
+var RETRIEVAL_NAME = /retriev|search|vector|embed|lookup|knowledge|rag|context|documents?/i;
+function pickSources(o) {
+  const found = [];
+  const out = o.outputs ?? o.output;
+  if (isObj(out)) {
+    found.push(...documentsFrom(out.documents ?? out.context ?? out.source_documents ?? out.sourceDocuments));
+  }
+  const inp = o.inputs ?? o.input;
+  if (isObj(inp)) {
+    found.push(...documentsFrom(inp.context ?? inp.documents ?? inp.retrieved ?? inp.chunks));
+  }
+  for (const key of ["child_runs", "childRuns", "children", "observations", "spans", "steps"]) {
+    const kids = o[key];
+    if (!Array.isArray(kids)) continue;
+    for (const kid of kids) {
+      if (!isObj(kid)) continue;
+      const name = `${str2(kid.run_type) ?? ""} ${str2(kid.type) ?? ""} ${str2(kid.name) ?? ""}`;
+      const isRetrieval = RETRIEVAL_NAME.test(name);
+      if (!isRetrieval) continue;
+      const kidOut = kid.outputs ?? kid.output;
+      found.push(...documentsFrom(kidOut));
+      if (isObj(kidOut)) found.push(...documentsFrom(kidOut.documents ?? kidOut.context));
+    }
+  }
+  if (isObj(o.metadata)) {
+    found.push(...documentsFrom(o.metadata.context ?? o.metadata.retrieved_documents ?? o.metadata.documents));
+  }
+  return [...new Set(found.filter((s) => s.trim().length > 0))];
+}
+function extractTrace(obj) {
+  const looksNested = isObj(obj.inputs) || isObj(obj.outputs) || isObj(obj.input) || isObj(obj.output) || Array.isArray(obj.observations) || Array.isArray(obj.child_runs) || Array.isArray(obj.childRuns);
+  if (!looksNested) return {};
+  const out = {
+    input: pickInput(obj),
+    output: pickOutput(obj),
+    sources: pickSources(obj),
+    id: str2(obj.id) ?? str2(obj.trace_id) ?? str2(obj.traceId) ?? str2(obj.run_id),
+    at: str2(obj.start_time) ?? str2(obj.startTime) ?? str2(obj.timestamp) ?? str2(obj.created_at)
+  };
+  return out;
+}
+
 // src/aiwork/record.ts
 var INPUT_KEYS = ["input", "prompt", "question", "query", "task", "instruction", "request"];
 var OUTPUT_KEYS = ["output", "response", "answer", "completion", "result", "generation", "text"];
@@ -2757,18 +2863,20 @@ function toRecord(item, line, issues) {
     return void 0;
   }
   const obj = item;
-  const output = firstString(obj, OUTPUT_KEYS);
+  const trace = extractTrace(obj);
+  const output = firstString(obj, OUTPUT_KEYS) ?? trace.output;
   if (!output) {
     issues.push({
       line,
-      reason: `No output found. Looked for: ${OUTPUT_KEYS.join(", ")}. Without an answer there is nothing to check.`
+      reason: `No output found. Looked for: ${OUTPUT_KEYS.join(", ")} (and LangSmith/Langfuse trace shapes). Without an answer there is nothing to check.`
     });
     return void 0;
   }
-  const input = firstString(obj, INPUT_KEYS) ?? "";
-  const sources = collectSources(obj);
-  const id = firstString(obj, ID_KEYS) ?? `line-${line}`;
-  const at = firstString(obj, TIME_KEYS);
+  const generic = collectSources(obj);
+  const input = firstString(obj, INPUT_KEYS) ?? trace.input ?? "";
+  const sources = generic.length > 0 ? generic : trace.sources ?? [];
+  const id = firstString(obj, ID_KEYS) ?? trace.id ?? `line-${line}`;
+  const at = firstString(obj, TIME_KEYS) ?? trace.at;
   return { id, at, input, sources, output, meta: obj };
 }
 function groundingSourcesFor(record) {
@@ -3686,14 +3794,14 @@ function builtinBatches() {
   const deg = casesToRecords(degenerate);
   const inc = casesToRecords(inconclusive);
   const con = casesToRecords(contradiction);
-  const str2 = casesToRecords(structured);
+  const str3 = casesToRecords(structured);
   return [
     { name: "billing-support", synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: "faithful-adversarial", synthetic: true, records: faith.records, labels: faith.labels },
     { name: "fabrication-adversarial", synthetic: true, records: fab.records, labels: fab.labels },
     { name: "degenerate-and-deferral", synthetic: true, records: deg.records, labels: deg.labels },
     { name: "self-contradiction", synthetic: true, records: con.records, labels: con.labels },
-    { name: "structured-output", synthetic: true, records: str2.records, labels: str2.labels },
+    { name: "structured-output", synthetic: true, records: str3.records, labels: str3.labels },
     { name: "inconclusive", synthetic: true, records: inc.records, labels: inc.labels }
   ];
 }

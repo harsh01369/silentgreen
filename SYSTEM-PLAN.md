@@ -407,7 +407,7 @@ real batches that neither the builder nor a fixture author wrote.
 - [in progress] Harden extraction: dates and quotations done; still to do are
   words-to-number, currency-code normalisation, fuzzy name matching.
 - [open] Real reporting from `check`, leading with the coverage-honesty sentence.
-- [open] Importers: JSONL and CSV done; LangSmith and Langfuse next.
+- [done] Importers: JSONL, JSON array, and LangSmith and Langfuse trace shapes unpacked automatically. CSV still to do.
 - [open] GitHub Action that runs `check` on a fixture set and comments on the PR.
 - [open] Publish precision and recall on the golden corpus in the README.
 

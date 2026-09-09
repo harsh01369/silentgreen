@@ -54,6 +54,12 @@ these things something different:
 rather than silently dropped, because a parser that quietly discards a third of the file and
 then reports no problems would be an unusually poor joke in this particular codebase.
 
+**LangSmith and Langfuse exports work as they are.** A LangChain run with `inputs` and
+`outputs` objects, generations nested two arrays deep, and the retrieved documents sitting
+in a child retriever run is unpacked automatically. So is a Langfuse trace with singular
+`input` / `output` and the retrieval step as an observation. Dump your runs to JSONL and
+pass the file. If a trace has no recoverable answer it is reported, never dropped.
+
 ### What the worked example finds
 
 Twenty answers. Every one was recorded as a completed task, and every one reads as helpful.

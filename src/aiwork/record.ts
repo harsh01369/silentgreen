@@ -13,6 +13,8 @@
  * lose a user in the first thirty seconds.
  */
 
+import { extractTrace } from './adapters';
+
 export interface TaskRecord {
   readonly id: string;
   readonly at?: string;
@@ -132,19 +134,24 @@ function toRecord(item: unknown, line: number, issues: ParseIssue[]): TaskRecord
   }
   const obj = item as Record<string, unknown>;
 
-  const output = firstString(obj, OUTPUT_KEYS);
+  // LangSmith and Langfuse bury the answer under their own nesting. Recover the
+  // flat shape first, and fall back to the generic field lookup.
+  const trace = extractTrace(obj);
+
+  const output = firstString(obj, OUTPUT_KEYS) ?? trace.output;
   if (!output) {
     issues.push({
       line,
-      reason: `No output found. Looked for: ${OUTPUT_KEYS.join(', ')}. Without an answer there is nothing to check.`,
+      reason: `No output found. Looked for: ${OUTPUT_KEYS.join(', ')} (and LangSmith/Langfuse trace shapes). Without an answer there is nothing to check.`,
     });
     return undefined;
   }
 
-  const input = firstString(obj, INPUT_KEYS) ?? '';
-  const sources = collectSources(obj);
-  const id = firstString(obj, ID_KEYS) ?? `line-${line}`;
-  const at = firstString(obj, TIME_KEYS);
+  const generic = collectSources(obj);
+  const input = firstString(obj, INPUT_KEYS) ?? trace.input ?? '';
+  const sources = generic.length > 0 ? generic : (trace.sources ?? []);
+  const id = firstString(obj, ID_KEYS) ?? trace.id ?? `line-${line}`;
+  const at = firstString(obj, TIME_KEYS) ?? trace.at;
 
   return { id, at, input, sources, output, meta: obj };
 }
