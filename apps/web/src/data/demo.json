@@ -1,0 +1,41 @@
+{
+  "invoice": "Invoice INV-2026-0412 for Fernweh Supply Ltd\nIssued 2026-08-14, due 2026-09-13\nBilling contact: accounts@fernweh.example\nSubtotal £571.00\nVAT £114.20\nTotal due £685.20\nPortal: https://billing.fernweh.example/inv/2026-0412",
+  "answer": "Your outstanding balance is £742.60, including VAT of £123.77, and it is due on 2026-09-30. If you need a copy of the invoice, email finance@fernweh.example and the team will send it over.",
+  "invented": [
+    {
+      "text": "finance@fernweh.example",
+      "kind": "email",
+      "why": "an email address that does not appear in the source, which means it was either invented or carried in from somewhere else"
+    },
+    {
+      "text": "£742.60",
+      "kind": "money",
+      "why": "a monetary amount that appears nowhere in the material the model was given"
+    },
+    {
+      "text": "£123.77",
+      "kind": "money",
+      "why": "a monetary amount that appears nowhere in the material the model was given"
+    },
+    {
+      "text": "2026-09-30",
+      "kind": "date",
+      "why": "a date that does not appear in the source"
+    }
+  ],
+  "checked": 4,
+  "batch": {
+    "total": 20,
+    "clean": 13,
+    "problematic": 7,
+    "byKind": {
+      "degenerate": 2,
+      "ungrounded": 4,
+      "deferred": 1,
+      "duplicated": 3,
+      "inconsistent": 0,
+      "malformed": 0
+    },
+    "caveat": "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+  }
+}

@@ -33,6 +33,12 @@ jobs:
           git diff --exit-code -- dist \
             || (echo "dist/ is stale. run 'npm run build' and commit the result." && exit 1)
 
+      - name: the web demo data matches the engine
+        run: |
+          npx tsx scripts/gen-web-demo.ts
+          git diff --exit-code -- apps/web/src/data \
+            || (echo "apps/web/src/data/demo.json is stale. regenerate and commit." && exit 1)
+
   api:
     runs-on: ubuntu-latest
     defaults:

@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import { HeroScene } from '@/components/hero-scene-lazy';
+import { LiveCheck } from '@/components/live-check';
 
 export default function Home() {
   return (
     <main className="relative">
       <SiteNav />
       <Hero />
+      <LiveCheck />
       <NoPass />
       <Catches />
       <NotAJudge />
