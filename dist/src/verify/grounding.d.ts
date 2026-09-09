@@ -43,6 +43,10 @@ export interface GroundingResult {
     readonly inconclusive: boolean;
     readonly reason?: string;
 }
+export declare function spelledNumbers(text: string): {
+    raw: string;
+    value: number;
+}[];
 /**
  * Pull out the things in this text that are either true of the source or not.
  *

@@ -404,8 +404,10 @@ real batches that neither the builder nor a fixture author wrote.
 - [done] Structural-conformance check: JSON wrapped in prose, truncated JSON, prose where
   JSON was asked for, a ragged markdown table. Stays quiet on ordinary prose that happens
   to contain a brace.
-- [in progress] Harden extraction: dates and quotations done; still to do are
-  words-to-number, currency-code normalisation, fuzzy name matching.
+- [done] Harden extraction: reformatted dates, quotations matched whole, numbers
+  written as words ("two thousand pounds" equals 2000, both directions), and currency
+  symbol vs code (both reduce to the same figure). Remaining niceties: European decimal
+  notation (deliberately skipped as ambiguous) and Ltd/Limited-style name fuzzing.
 - [open] Real reporting from `check`, leading with the coverage-honesty sentence.
 - [done] Importers: JSONL, JSON array, CSV (RFC 4180, flexible column names), and LangSmith and Langfuse trace shapes unpacked automatically.
 - [done] GitHub Action (`action.yml`) that runs `check` over a path or glob and comments

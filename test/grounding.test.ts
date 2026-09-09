@@ -53,6 +53,19 @@ describe('an answer that came from the source', () => {
     const r = checkGrounding('The policy says "refunds are issued within 14 days" here.', [source]);
     assert.deepEqual(keys(r), [], 'the quote must be checked whole, with its 14 intact');
   });
+
+  test('a figure written as words matches the same figure in digits', () => {
+    assert.deepEqual(keys(checkGrounding('You owe two thousand pounds.', ['Total: 2000.00 GBP'])), []);
+    assert.deepEqual(keys(checkGrounding('You owe £2,000.00.', ['The fee is two thousand pounds.'])), []);
+  });
+
+  test('a fabricated figure written as words is still caught', () => {
+    assert.deepEqual(keys(checkGrounding('You owe five thousand pounds.', ['Total: 2000.00 GBP'])), ['five thousand']);
+  });
+
+  test('"one of the reasons" is not read as the number one', () => {
+    assert.deepEqual(keys(checkGrounding('One of the reasons is cost.', ['a note about cost and speed'])), []);
+  });
 });
 
 describe('an answer the model made up', () => {

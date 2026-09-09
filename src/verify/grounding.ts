@@ -128,6 +128,68 @@ function dateCandidates(raw: string): readonly string[] {
 }
 
 /**
+ * Numbers written as words: "two thousand", "twenty-five thousand pounds".
+ *
+ * Only spans that carry a scale word (hundred, thousand, million, billion) are
+ * matched, so an ordinary "one of the reasons" is left alone. Returns the span
+ * as written and its value, so "£2,000" in the answer and "two thousand" in the
+ * source resolve to the same key.
+ */
+const NUM_WORD: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+  seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+  sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+const NUM_SCALE: Record<string, number> = { hundred: 100, thousand: 1000, million: 1_000_000, billion: 1_000_000_000 };
+
+const SPELLED_RE = new RegExp(
+  String.raw`\b(?:(?:${Object.keys(NUM_WORD).join('|')}|${Object.keys(NUM_SCALE).join('|')}|and|a)[\s-]+)*(?:${Object.keys(
+    NUM_SCALE,
+  ).join('|')})\b`,
+  'gi',
+);
+
+function spelledValue(span: string): number | null {
+  const words = span.toLowerCase().split(/[\s-]+/).filter((w) => w && w !== 'and');
+  let result = 0;
+  let current = 0;
+  let sawAny = false;
+  for (const w of words) {
+    if (w === 'a') {
+      current = current || 1;
+      continue;
+    }
+    if (w in NUM_WORD) {
+      current += NUM_WORD[w]!;
+      sawAny = true;
+    } else if (w in NUM_SCALE) {
+      const scale = NUM_SCALE[w]!;
+      sawAny = true;
+      if (scale >= 1000) {
+        result += (current || 1) * scale;
+        current = 0;
+      } else {
+        current = (current || 1) * scale;
+      }
+    } else {
+      return null;
+    }
+  }
+  return sawAny ? result + current : null;
+}
+
+export function spelledNumbers(text: string): { raw: string; value: number }[] {
+  const out: { raw: string; value: number }[] = [];
+  for (const m of text.matchAll(SPELLED_RE)) {
+    const raw = m[0].trim();
+    const value = spelledValue(raw);
+    if (value !== null && value > TRIVIAL_NUMBER_MAX) out.push({ raw, value });
+  }
+  return out;
+}
+
+/**
  * Pull out the things in this text that are either true of the source or not.
  *
  * Order matters: an email is matched before the number inside it, so an address
@@ -169,6 +231,12 @@ export function extractAtoms(text: string): readonly Atom[] {
   for (const m of text.matchAll(QUOTE_RE)) {
     const raw = m[1] ?? '';
     if (raw) push('quote', raw, normaliseText(raw));
+  }
+
+  // Numbers written as words, keyed by their value so they match digit forms.
+  for (const { raw, value } of spelledNumbers(text)) {
+    push('number', raw, String(value));
+    remaining = remaining.split(raw).join(' ');
   }
 
   for (const { kind, re } of PATTERNS) {
@@ -303,6 +371,7 @@ export function checkGrounding(
   const sourceNormalised = normaliseText(sourceRaw);
   const sourceNumbers = new Set<string>();
   for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  for (const { value } of spelledNumbers(sourceRaw)) sourceNumbers.add(String(value));
 
   const sourceDates = new Set<string>();
   for (const m of sourceRaw.matchAll(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g)) {

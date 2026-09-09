@@ -417,6 +417,80 @@ function dateCandidates(raw) {
   }
   return [raw.toLowerCase()];
 }
+var NUM_WORD = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90
+};
+var NUM_SCALE = { hundred: 100, thousand: 1e3, million: 1e6, billion: 1e9 };
+var SPELLED_RE = new RegExp(
+  String.raw`\b(?:(?:${Object.keys(NUM_WORD).join("|")}|${Object.keys(NUM_SCALE).join("|")}|and|a)[\s-]+)*(?:${Object.keys(
+    NUM_SCALE
+  ).join("|")})\b`,
+  "gi"
+);
+function spelledValue(span) {
+  const words = span.toLowerCase().split(/[\s-]+/).filter((w) => w && w !== "and");
+  let result = 0;
+  let current = 0;
+  let sawAny = false;
+  for (const w of words) {
+    if (w === "a") {
+      current = current || 1;
+      continue;
+    }
+    if (w in NUM_WORD) {
+      current += NUM_WORD[w];
+      sawAny = true;
+    } else if (w in NUM_SCALE) {
+      const scale = NUM_SCALE[w];
+      sawAny = true;
+      if (scale >= 1e3) {
+        result += (current || 1) * scale;
+        current = 0;
+      } else {
+        current = (current || 1) * scale;
+      }
+    } else {
+      return null;
+    }
+  }
+  return sawAny ? result + current : null;
+}
+function spelledNumbers(text) {
+  const out = [];
+  for (const m of text.matchAll(SPELLED_RE)) {
+    const raw = m[0].trim();
+    const value = spelledValue(raw);
+    if (value !== null && value > TRIVIAL_NUMBER_MAX) out.push({ raw, value });
+  }
+  return out;
+}
 function extractAtoms(text) {
   if (!text) return [];
   let remaining = text;
@@ -439,6 +513,10 @@ function extractAtoms(text) {
   for (const m of text.matchAll(QUOTE_RE)) {
     const raw = m[1] ?? "";
     if (raw) push("quote", raw, normaliseText(raw));
+  }
+  for (const { raw, value } of spelledNumbers(text)) {
+    push("number", raw, String(value));
+    remaining = remaining.split(raw).join(" ");
   }
   for (const { kind, re } of PATTERNS) {
     const found = [];
@@ -524,6 +602,7 @@ function checkGrounding(output, sources, opts = {}) {
   const sourceNormalised = normaliseText(sourceRaw);
   const sourceNumbers = /* @__PURE__ */ new Set();
   for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  for (const { value } of spelledNumbers(sourceRaw)) sourceNumbers.add(String(value));
   const sourceDates = /* @__PURE__ */ new Set();
   for (const m of sourceRaw.matchAll(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g)) {
     for (const d of dateCandidates(m[0])) sourceDates.add(d);
@@ -1221,6 +1300,12 @@ var faithful = [
     source: "Amount due: USD 1,999.00. Account AC-77120.",
     output: "The amount due is $1,999.00 on account AC-77120.",
     label: { id: "fa-10-currency-code-form", verdict: "clean", note: "currency named as a code in the source and a symbol in the answer" }
+  },
+  {
+    id: "fa-11-spelled-number",
+    source: "The retainer is 2,000.00 GBP a month.",
+    output: "The retainer is two thousand pounds a month.",
+    label: { id: "fa-11-spelled-number", verdict: "clean", note: "a figure written as words is the same figure" }
   }
 ];
 var fabricated = [
@@ -1271,6 +1356,12 @@ var fabricated = [
     source: "Subtotal 400.00 GBP. VAT 80.00 GBP. Invoice INV-9001.",
     output: "The total due on invoice INV-9001 is \xA3560.00.",
     label: { id: "fb-08-inflated-total", verdict: "problem", kinds: ["ungrounded"], atoms: ["\xA3560.00"], note: "400 + 80 is not 560, and 560 is nowhere in the source" }
+  },
+  {
+    id: "fb-09-spelled-fabrication",
+    source: "The retainer is 2,000.00 GBP a month.",
+    output: "The retainer is five thousand pounds a month.",
+    label: { id: "fb-09-spelled-fabrication", verdict: "problem", kinds: ["ungrounded"], atoms: ["five thousand"], note: "the figure, written as words, is still invented" }
   }
 ];
 var degenerate = [

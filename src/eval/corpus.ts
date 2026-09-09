@@ -111,6 +111,12 @@ const faithful: readonly Case[] = [
     output: 'The amount due is $1,999.00 on account AC-77120.',
     label: { id: 'fa-10-currency-code-form', verdict: 'clean', note: 'currency named as a code in the source and a symbol in the answer' },
   },
+  {
+    id: 'fa-11-spelled-number',
+    source: 'The retainer is 2,000.00 GBP a month.',
+    output: 'The retainer is two thousand pounds a month.',
+    label: { id: 'fa-11-spelled-number', verdict: 'clean', note: 'a figure written as words is the same figure' },
+  },
 ];
 
 /* --------------------------------------------------- fabrication-adversarial */
@@ -163,6 +169,12 @@ const fabricated: readonly Case[] = [
     source: 'Subtotal 400.00 GBP. VAT 80.00 GBP. Invoice INV-9001.',
     output: 'The total due on invoice INV-9001 is £560.00.',
     label: { id: 'fb-08-inflated-total', verdict: 'problem', kinds: ['ungrounded'], atoms: ['£560.00'], note: '400 + 80 is not 560, and 560 is nowhere in the source' },
+  },
+  {
+    id: 'fb-09-spelled-fabrication',
+    source: 'The retainer is 2,000.00 GBP a month.',
+    output: 'The retainer is five thousand pounds a month.',
+    label: { id: 'fb-09-spelled-fabrication', verdict: 'problem', kinds: ['ungrounded'], atoms: ['five thousand'], note: 'the figure, written as words, is still invented' },
   },
 ];
 
