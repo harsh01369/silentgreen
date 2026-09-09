@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>silentgreen — every run green, nobody looked</title>
+<meta name="description" content="Your automation platform reports that the code ran. It cannot report whether the work happened. silentgreen verifies what your workflows actually produced, and says plainly when it cannot.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ground: #e9edf1;
+    --panel: #ffffff;
+    --ink: #0f1317;
+    --ink-soft: #525a63;
+    --ink-faint: #79828c;
+    --rule: #d3d9df;
+    --rule-soft: #e7ebef;
+    --green: #157f47;
+    --green-cell: #34a76a;
+    --green-bg: #eef7f2;
+    --red: #ab241c;
+    --red-cell: #d4453b;
+    --red-bg: #fcf1f0;
+    --amber: #7d5200;
+    --amber-bg: #fcf7ea;
+    --sans: "Instrument Sans", ui-sans-serif, system-ui, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 400 16px/1.6 var(--sans);
+    font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+  header.top { padding: 22px 0 0; }
+  .top .wrap { display: flex; align-items: baseline; justify-content: space-between; gap: 20px; }
+  .mark { font-weight: 700; letter-spacing: -0.02em; font-size: 18px; }
+  .mark i { font-style: normal; color: var(--green); }
+  .top a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid var(--rule); font-size: 14.5px; }
+  .top a:hover, .top a:focus-visible { color: var(--ink); border-bottom-color: var(--ink); }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 40px 0 8px; }
+  .hero h1 {
+    font-size: clamp(30px, 4.6vw, 50px); line-height: 1.05; letter-spacing: -0.03em;
+    font-weight: 700; margin: 0 0 14px; max-width: 17ch;
+  }
+  .hero .sub { font-size: 19px; line-height: 1.5; color: var(--ink-soft); max-width: 60ch; margin: 0 0 30px; }
+  .hero .sub strong { color: var(--ink); font-weight: 600; }
+
+  .console {
+    background: var(--panel); border: 1px solid var(--rule);
+    box-shadow: 0 1px 0 rgba(15,19,23,.04);
+  }
+  .console-head {
+    display: flex; flex-wrap: wrap; gap: 14px 22px; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--rule-soft);
+  }
+  .wf-name { font-weight: 600; font-size: 15.5px; }
+  .wf-meta { color: var(--ink-faint); font-size: 13.5px; }
+
+  .switch { display: flex; border: 1px solid var(--rule); }
+  .switch button {
+    font: 500 13.5px/1 var(--sans); color: var(--ink-soft); background: transparent;
+    border: 0; padding: 9px 14px; cursor: pointer;
+  }
+  .switch button + button { border-left: 1px solid var(--rule); }
+  .switch button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+  .switch button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  .console-body { display: grid; grid-template-columns: auto minmax(280px, 1fr); gap: 34px; padding: 24px 22px 24px; align-items: start; }
+  .grid-area { overflow-x: auto; }
+  .axis-hours {
+    display: grid; grid-template-rows: repeat(9, 1fr); gap: 3px;
+    font: 400 10.5px/1 var(--mono); color: var(--ink-faint); padding-right: 8px; align-content: start;
+  }
+  .axis-hours span { height: 18px; display: flex; align-items: center; }
+  .grid-row { display: flex; align-items: flex-start; }
+  .cells {
+    display: grid; grid-auto-flow: column; grid-template-rows: repeat(9, 18px);
+    gap: 3px; min-width: 0;
+  }
+  .cell {
+    width: 18px; height: 18px; background: var(--green-cell); border: 0; padding: 0;
+    transition: background-color .28s ease;
+  }
+  .cell.violated { background: var(--red-cell); }
+  .cell:hover, .cell:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .axis-days { display: flex; gap: 3px; margin-top: 9px; font: 400 10.5px/1 var(--mono); color: var(--ink-faint); }
+  .axis-days span { width: 18px; text-align: left; white-space: nowrap; }
+
+  .readout .line { font-size: 17px; line-height: 1.45; margin: 0; }
+  .readout .line b { font-weight: 600; }
+  .readout .green-line { color: var(--green); font-weight: 600; }
+  .readout .red-line { color: var(--red); font-weight: 600; }
+  .readout .note { color: var(--ink-faint); font-size: 14px; margin: 8px 0 0; max-width: 72ch; }
+
+  .payload { margin: 20px 0 0; border: 1px solid var(--rule); background: var(--red-bg); border-left: 3px solid var(--red); }
+  .payload[hidden] { display: none; }
+  .payload .ph { padding: 13px 15px 0; font-size: 13.5px; color: var(--ink-soft); }
+  .payload .pv {
+    margin: 9px 15px 15px; padding: 11px 13px; background: var(--panel); border: 1px solid var(--rule);
+    font: 400 12.5px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 68px 0 0; }
+  h2 { font-size: clamp(24px, 3vw, 33px); line-height: 1.12; letter-spacing: -0.025em; font-weight: 700; margin: 0 0 12px; max-width: 22ch; }
+  .lede { font-size: 18px; color: var(--ink-soft); max-width: 62ch; margin: 0 0 26px; }
+  p { max-width: 66ch; }
+
+  .verdicts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .verdict { background: var(--panel); padding: 22px 20px 24px; }
+  .verdict .n { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
+  .verdict .t { font-weight: 600; margin: 8px 0 6px; font-size: 16px; }
+  .verdict p { font-size: 14.5px; color: var(--ink-soft); margin: 0; max-width: none; }
+  .verdict.v .n { color: var(--red); }
+  .verdict.u .n { color: var(--amber); }
+  .verdict.p .n { color: var(--green); }
+
+  .basis { display: grid; grid-template-columns: 260px 1fr; gap: 0; border: 1px solid var(--rule); background: var(--panel); }
+  .basis-tabs { border-right: 1px solid var(--rule); }
+  .basis-tabs button {
+    display: block; width: 100%; text-align: left; background: transparent; border: 0;
+    border-bottom: 1px solid var(--rule-soft); padding: 16px 18px; cursor: pointer;
+    font: 600 15px/1.3 var(--sans); color: var(--ink-soft);
+  }
+  .basis-tabs button small { display: block; font-weight: 400; font-size: 13px; color: var(--ink-faint); margin-top: 3px; }
+  .basis-tabs button[aria-selected="true"] { background: var(--ink); color: #fff; }
+  .basis-tabs button[aria-selected="true"] small { color: rgba(255,255,255,.72); }
+  .basis-tabs button:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .basis-body { padding: 24px 26px; }
+  .basis-body h3 { margin: 0 0 10px; font-size: 17px; font-weight: 600; }
+  .basis-body dl { margin: 18px 0 0; }
+  .basis-body dt { font-weight: 600; font-size: 14px; color: var(--ink-soft); }
+  .basis-body dd { margin: 2px 0 14px; font-size: 15px; }
+  .can { border-left: 3px solid var(--green); padding-left: 12px; }
+  .cannot { border-left: 3px solid var(--amber); padding-left: 12px; }
+
+  .findings { border: 1px solid var(--rule); background: var(--panel); }
+  .finding { padding: 20px 22px; border-bottom: 1px solid var(--rule-soft); }
+  .finding:last-child { border-bottom: 0; }
+  .finding h3 { margin: 0 0 4px; font-size: 16.5px; font-weight: 600; }
+  .finding .when { color: var(--ink-faint); font-size: 13.5px; margin: 0 0 10px; }
+  .finding p { font-size: 15px; margin: 0; color: var(--ink-soft); }
+  .finding .ev { margin-top: 12px; padding: 11px 13px; background: var(--ground); border: 1px solid var(--rule);
+    font: 400 12.5px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+
+  .stale { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .stale > div { background: var(--panel); padding: 22px 22px 24px; }
+  .stale h3 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--ink-soft); }
+  .stale table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  .stale td { padding: 6px 0; border-bottom: 1px solid var(--rule-soft); }
+  .stale td:last-child { text-align: right; font-weight: 600; font-size: 19px; }
+  .stale .zero { color: var(--ink-faint); }
+
+  .refusal { border: 1px solid var(--rule); border-left: 3px solid var(--amber); background: var(--amber-bg); padding: 20px 22px; }
+  .refusal .said { font: 400 14px/1.5 var(--mono); color: var(--ink-soft); margin: 0 0 10px; }
+  .refusal p { margin: 0; font-size: 15.5px; }
+
+  pre.cmd {
+    background: var(--ink); color: #e9edf1; padding: 16px 18px; overflow-x: auto;
+    font: 400 14px/1.7 var(--mono); margin: 0 0 14px;
+  }
+  pre.cmd .c { color: #8fb9a0; }
+
+  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .plan { background: var(--panel); padding: 24px 22px 26px; }
+  .plan h3 { margin: 0 0 2px; font-size: 16px; font-weight: 600; }
+  .plan .price { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 12px; }
+  .plan .price small { font-size: 14px; font-weight: 400; color: var(--ink-faint); letter-spacing: 0; }
+  .plan ul { margin: 0; padding: 0; list-style: none; font-size: 14.5px; color: var(--ink-soft); }
+  .plan li { padding: 5px 0 5px 16px; position: relative; }
+  .plan li::before { content: ""; position: absolute; left: 0; top: 13px; width: 7px; height: 1px; background: var(--ink-faint); }
+
+  ul.plain { padding-left: 18px; max-width: 66ch; }
+  ul.plain li { margin-bottom: 9px; }
+
+  footer { margin-top: 76px; padding: 28px 0 56px; border-top: 1px solid var(--rule); color: var(--ink-faint); font-size: 14px; }
+  footer a { color: var(--ink-soft); }
+
+  @media (max-width: 860px) {
+    .verdicts, .plans { grid-template-columns: 1fr; }
+    .basis { grid-template-columns: 1fr; }
+    .basis-tabs { border-right: 0; border-bottom: 1px solid var(--rule); display: flex; }
+    .basis-tabs button { border-bottom: 0; border-right: 1px solid var(--rule-soft); }
+    .stale { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { .cell { transition: none; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="mark">silent<i>green</i></div>
+    <a href="https://github.com/harsh01369/silentgreen">Source and evaluation on GitHub</a>
+  </div>
+</header>
+
+<div class="wrap hero">
+  <h1>Every run green. Nobody looked.</h1>
+  <p class="sub">
+    Your automation platform can tell you that the code ran. It cannot tell you that the work
+    happened. Below are <strong>six weeks of real executions</strong> from an order sync.
+    The platform recorded every single one as a success.
+  </p>
+
+  <div class="console">
+    <div class="console-head">
+      <div>
+        <div class="wf-name" id="wfName">&nbsp;</div>
+        <div class="wf-meta" id="wfMeta">&nbsp;</div>
+      </div>
+      <div class="switch" role="group" aria-label="Choose what the grid shows">
+        <button id="btnPlatform" aria-pressed="true">What the platform reports</button>
+        <button id="btnVerified" aria-pressed="false">What was actually verified</button>
+      </div>
+    </div>
+
+    <div class="console-body">
+      <div class="grid-area">
+        <div class="grid-row">
+          <div class="axis-hours" aria-hidden="true">
+            <span>09</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span>
+          </div>
+          <div>
+            <div class="cells" id="cells" role="img" aria-label="Grid of executions, one cell per run, columns are working days and rows are working hours"></div>
+            <div class="axis-days" id="axisDays" aria-hidden="true"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="readout">
+        <p class="line" id="readout">&nbsp;</p>
+        <p class="note" id="readoutNote">&nbsp;</p>
+
+        <div class="payload" id="payload" hidden>
+          <p class="ph">What a customer received, every hour, for three weeks:</p>
+          <div class="pv" id="payloadValue"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <section>
+    <h2>There is no pass</h2>
+    <p class="lede">
+      Most tools report two states, and the second one is a lie of omission: a check that never
+      ran and a check that succeeded look identical. This reports three, and the middle one is
+      the whole point.
+    </p>
+    <div class="verdicts" id="verdicts"></div>
+    <p class="note" style="color:var(--ink-faint);font-size:14px;margin-top:12px">
+      Counts from the six weeks above. Every violation quotes the literal captured value that decided it.
+    </p>
+  </section>
+
+  <section>
+    <h2>What the platform never showed you</h2>
+    <p class="lede">
+      One upstream field was renamed. Rows kept being written, emails kept being sent, and the
+      volume never changed, so a baseline monitor watching for anomalies saw nothing at all.
+    </p>
+    <div class="findings" id="findings"></div>
+  </section>
+
+  <section>
+    <h2>Where did the expectation come from?</h2>
+    <p class="lede">
+      This is the question no monitoring tool asks, and it decides what a green tick is worth.
+      An expectation learned from a system's own output cannot show the system was ever
+      right. It can only show it has not changed.
+    </p>
+    <div class="basis">
+      <div class="basis-tabs" role="tablist" aria-label="Basis of an expectation">
+        <button role="tab" aria-selected="false" data-basis="intent">Stated intent<small>A person said what it is for</small></button>
+        <button role="tab" aria-selected="false" data-basis="structure">The definition<small>What the graph itself declares</small></button>
+        <button role="tab" aria-selected="true" data-basis="observation">Observed history<small>What it has been doing</small></button>
+      </div>
+      <div class="basis-body" id="basisBody"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>A check learned from history is not a standard yet</h2>
+    <p class="lede">
+      Before an expectation drawn from past behaviour can turn anything green, somebody has to
+      say which period they believe was correct, and how they know. If they will not say it,
+      the check stays unconfirmed and reports as unproven, which is the honest answer.
+    </p>
+    <div class="refusal">
+      <p class="said">how do you know that window was good? &gt; "looks fine"</p>
+      <p id="refusal"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Checks do not rot. They go stale, loudly.</h2>
+    <p class="lede">
+      Somebody adds a retry to one node. Every expectation was confirmed against the previous
+      revision, so none of them describes what runs now. Here are the same contracts against
+      the same executions, one revision later.
+    </p>
+    <div class="stale" id="stale"></div>
+    <p style="margin-top:16px;color:var(--ink-soft)">
+      Nothing turned green and nothing kept accusing. A workflow rename or a node moved on the
+      canvas changes nothing, because the revision hash is computed on meaning rather than on
+      the document. Rewiring a connection, changing a request target or disabling a node
+      invalidates every check bound to it.
+    </p>
+  </section>
+
+  <section>
+    <h2>Run it against your own instance</h2>
+    <p class="lede">
+      Read-only. There is no code path in this tool that writes to, activates or deletes
+      anything on your platform. The worked example above needs no credentials at all.
+    </p>
+    <pre class="cmd"><span class="c"># the worked example, no account needed</span>
+npx silentgreen demo
+
+<span class="c"># your own n8n, read-only API key</span>
+export N8N_URL=https://your-n8n.example
+export N8N_API_KEY=n8n_api_...
+npx silentgreen scan</pre>
+    <p style="color:var(--ink-soft)">
+      <code style="font-family:var(--mono);font-size:13.5px">scan</code> proposes contracts and explains where each one came from.
+      Nothing it proposes can raise an alert until you confirm it.
+    </p>
+  </section>
+
+  <section>
+    <h2>What it costs</h2>
+    <p class="lede">
+      The engine is open source and stays that way. What is worth paying for is the part that
+      runs continuously, keeps the evidence, and produces the record your client reads.
+    </p>
+    <div class="plans">
+      <div class="plan">
+        <h3>Self-hosted</h3>
+        <div class="price">Free<small> forever</small></div>
+        <ul>
+          <li>Every check in this page</li>
+          <li>The CLI, on your own schedule</li>
+          <li>Local evidence ledger</li>
+          <li>MIT licensed</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3>Hosted</h3>
+        <div class="price">£29<small> / month</small></div>
+        <ul>
+          <li>25 workflows, checked continuously</li>
+          <li>Absence detection with a real clock</li>
+          <li>Alerts to Slack or email</li>
+          <li>Contract review queue</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3>Agency</h3>
+        <div class="price">£99<small> / month</small></div>
+        <ul>
+          <li>Unlimited workflows, separated by client</li>
+          <li>Monthly evidence record per client</li>
+          <li>Hash-chained, exportable, your branding</li>
+          <li>The document that answers "what am I paying for"</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What this does not do</h2>
+    <ul class="plain">
+      <li>It cannot tell you a workflow is <em>correct</em> unless somebody states what it is for. Most contracts it proposes are structural or observational, and it labels them as such rather than letting them imply more than they earned.</li>
+      <li>It only sees what your platform retained. If execution data is pruned, a check reports unproven rather than passing.</li>
+      <li>Absence detection on an irregular, event-driven trigger is noisy, and it says so instead of offering you an alarm that will be muted within a fortnight.</li>
+      <li>The evidence ledger is a hash chain in a file you control. It makes editing and deletion detectable. It is not a claim against a determined operator who owns the file, and it is not presented as one.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Built by <a href="https://github.com/harsh01369">harsh01369</a>.
+    Every number on this page is generated by the same engine the CLI runs, so the page and the tool cannot quietly disagree.
+    <span id="genAt"></span>
+  </footer>
+
+</div>
+
+<script src="demo-data.js"></script>
+<script>
+(function () {
+  var d = window.SG;
+  if (!d) return;
+
+  /* ---------- hero grid ---------- */
+  var cellsEl = document.getElementById('cells');
+  var frag = document.createDocumentFragment();
+  var nodes = [];
+  d.cells.forEach(function (c, i) {
+    var el = document.createElement('div');
+    el.className = 'cell';
+    var when = new Date(c.at);
+    el.title = when.toISOString().slice(0, 16).replace('T', ' ') + ' — platform: ' + c.platform;
+    el.dataset.verdict = c.verdict;
+    frag.appendChild(el);
+    nodes.push(el);
+  });
+  cellsEl.appendChild(frag);
+
+  /* Day axis: a real date at the start of each working week, not an index. */
+  var rows = 9;
+  var days = d.cells.length / rows;
+  var axis = document.getElementById('axisDays');
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  for (var i = 0; i < days; i++) {
+    var s = document.createElement('span');
+    if (i % 5 === 0) {
+      var first = new Date(d.cells[i * rows].at);
+      s.textContent = first.getUTCDate() + ' ' + MONTHS[first.getUTCMonth()];
+    }
+    axis.appendChild(s);
+  }
+
+  document.getElementById('wfName').textContent = d.workflowName;
+  document.getElementById('wfMeta').textContent =
+    d.cells.length + ' executions over ' + d.weeks + ' weeks, hourly on weekdays';
+
+  var readout = document.getElementById('readout');
+  var note = document.getElementById('readoutNote');
+  var payload = document.getElementById('payload');
+  var payloadValue = document.getElementById('payloadValue');
+  var btnP = document.getElementById('btnPlatform');
+  var btnV = document.getElementById('btnVerified');
+
+  /* The captured email body, taken from the findings rather than retyped. */
+  var templateFinding = d.findings.filter(function (f) {
+    return f.evidence && f.evidence.indexOf('{{') !== -1;
+  })[0];
+
+  function showPlatform() {
+    nodes.forEach(function (n) { n.classList.remove('violated'); });
+    readout.innerHTML = '<span class="green-line">' + d.platform.sentence + '</span>';
+    note.textContent =
+      'Nothing here is false. It is simply not an answer to the question "did the work happen", ' +
+      'and for most teams it is the only answer available.';
+    payload.hidden = true;
+    btnP.setAttribute('aria-pressed', 'true');
+    btnV.setAttribute('aria-pressed', 'false');
+  }
+
+  function showVerified() {
+    nodes.forEach(function (n) {
+      if (n.dataset.verdict === 'violated') n.classList.add('violated');
+    });
+    readout.innerHTML = '<span class="red-line">' + d.headline + '</span>';
+    note.textContent =
+      'Row after row written with a null where the customer email should be, and every one of ' +
+      'those runs recorded as a success. The volume never changed, so an anomaly detector saw nothing.';
+    if (templateFinding) {
+      payloadValue.textContent = templateFinding.evidence;
+      payload.hidden = false;
+    }
+    btnP.setAttribute('aria-pressed', 'false');
+    btnV.setAttribute('aria-pressed', 'true');
+  }
+
+  btnP.addEventListener('click', showPlatform);
+  btnV.addEventListener('click', showVerified);
+  showPlatform();
+
+  /* ---------- verdict counts ---------- */
+  var v = document.getElementById('verdicts');
+  [
+    ['v', d.counts.violated, 'violated', 'A confirmed expectation was evaluated against real captured output and did not hold. The value that decided it is quoted.'],
+    ['u', d.counts.unproven, 'unproven', 'We did not establish this, and the reason is stated: no expectation, an unconfirmed one, a stale one, or output the platform did not retain.'],
+    ['p', d.counts.proven, 'proven', 'A confirmed, current expectation held against output that was actually captured. Not an absence of findings.']
+  ].forEach(function (row) {
+    var el = document.createElement('div');
+    el.className = 'verdict ' + row[0];
+    el.innerHTML = '<div class="n">' + row[1] + '</div><div class="t">' + row[2] + '</div><p>' + row[3] + '</p>';
+    v.appendChild(el);
+  });
+
+  /* ---------- findings ---------- */
+  var f = document.getElementById('findings');
+  d.findings.forEach(function (x) {
+    var el = document.createElement('div');
+    el.className = 'finding';
+    var when = x.firstAt
+      ? x.count + ' run' + (x.count === 1 ? '' : 's') + ', first at ' + new Date(x.firstAt).toISOString().slice(0, 16).replace('T', ' ')
+      : 'Detected against the workflow as a whole rather than any single run';
+    el.innerHTML =
+      '<h3>' + esc(x.statement) + '</h3>' +
+      '<p class="when">' + esc(when) + '</p>' +
+      (x.detail ? '<p>' + esc(x.detail) + '</p>' : '') +
+      (x.evidence ? '<div class="ev">' + esc(x.evidence) + '</div>' : '');
+    f.appendChild(el);
+  });
+
+  /* ---------- basis tabs ---------- */
+  var BASIS = {
+    intent: {
+      title: 'Somebody stated what this workflow is for',
+      body: 'The strongest kind, and the only kind that can establish correctness rather than mere consistency. It cannot be derived from the workflow or from its output, because both of them are the thing being judged.',
+      can: 'Show the workflow is doing the job a named person said it was for.',
+      cannot: 'Show that the stated job is still the job the business needs.'
+    },
+    structure: {
+      title: 'Read from the workflow definition itself',
+      body: 'The graph declares that it appends three columns to a sheet, so we assert three columns. Useful, cheap, and available on day one with no history at all.',
+      can: 'Show the workflow is doing what its own definition says it does.',
+      cannot: 'Show the definition was ever correct.'
+    },
+    observation: {
+      title: 'Learned from what the workflow has been doing',
+      body: 'This step has returned between 40 and 60 items every weekday for a month. Every baseline monitor on the market is built on this, and almost none of them tell you that is what you are looking at.',
+      can: 'Show behaviour has not changed since a window somebody attested was good.',
+      cannot: 'Show behaviour in that window was correct. If it was already broken, the mistake becomes the standard.'
+    }
+  };
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.basis-tabs button'));
+  var body = document.getElementById('basisBody');
+  function renderBasis(key) {
+    var b = BASIS[key];
+    var live = d.honesty.byBasis[key];
+    body.innerHTML =
+      '<h3>' + esc(b.title) + '</h3>' +
+      '<p>' + esc(b.body) + '</p>' +
+      '<dl>' +
+      '<dt>A green result here proves</dt><dd class="can">' + esc(b.can) + '</dd>' +
+      '<dt>It does not prove</dt><dd class="cannot">' + esc(b.cannot) + '</dd>' +
+      '</dl>' +
+      '<p style="color:var(--ink-faint);font-size:14px;margin:0">' +
+      'In the six weeks above, ' + live + ' of the ' + d.honesty.live + ' live checks had this basis.</p>';
+    tabs.forEach(function (t) { t.setAttribute('aria-selected', String(t.dataset.basis === key)); });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { renderBasis(t.dataset.basis); });
+  });
+  renderBasis('observation');
+
+  document.getElementById('refusal').textContent = d.refusalMessage;
+
+  /* ---------- stale ---------- */
+  var stale = document.getElementById('stale');
+  function panel(title, counts, extra) {
+    return '<div><h3>' + title + '</h3><table>' +
+      row('proven', counts.proven) + row('violated', counts.violated) + row('unproven', counts.unproven) +
+      '</table>' + (extra || '') + '</div>';
+  }
+  function row(label, n) {
+    return '<tr><td>' + label + '</td><td class="' + (n === 0 ? 'zero' : '') + '">' + n + '</td></tr>';
+  }
+  stale.innerHTML =
+    panel('Contracts confirmed against this revision', d.counts) +
+    panel('The same contracts, one node edited', d.afterEdit.counts,
+      '<p style="font-size:14px;color:var(--ink-faint);margin:14px 0 0">' +
+      esc(d.afterEdit.drift.join(' ')) + '</p>');
+
+  var g = document.getElementById('genAt');
+  if (g && d.generatedAt) g.textContent = 'Figures generated ' + d.generatedAt.slice(0, 10) + '.';
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+})();
+</script>
+</body>
+</html>
