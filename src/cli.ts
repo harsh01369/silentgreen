@@ -30,6 +30,8 @@ import { channelsFromEnv, send, renderText, type Channel, type MessageContext } 
 import { parseTaskRecords, type TaskRecord } from './aiwork/record';
 import { checkBatch } from './aiwork/check';
 import { demoTasks } from './aiwork/demo';
+import { builtinBatches } from './eval/corpus';
+import { scoreBatch, gate, DEFAULT_GATE } from './eval/score';
 
 try {
   process.loadEnvFile('.env');
@@ -335,6 +337,74 @@ ${c(C.dim, 'One JSON object per line. Field names are flexible:')}
   }
 
   if (summary.problematic > 0) process.exitCode = 1;
+}
+
+/* ------------------------------------------------------------------ eval -- */
+
+function runEval(rest: readonly string[]): void {
+  const verbose = rest.includes('--verbose') || rest.includes('-v');
+  const boards = builtinBatches().map(scoreBatch);
+
+  console.log(`
+${c(C.bold, 'silentgreen eval')} ${c(C.dim, 'checks scored against the labelled corpus')}
+
+Every batch below is synthetic: written to pin down intended behaviour, not
+drawn from real traffic. The numbers say the engine does what its author meant,
+and nothing stronger, until real batches replace these.
+`);
+
+  rule('Per batch');
+  const pad = (s: string, n: number) => (s.length >= n ? s : s + ' '.repeat(n - s.length));
+  console.log(c(C.dim, `  ${pad('batch', 26)} ${pad('P', 6)} ${pad('R', 6)} ${pad('FP', 4)} ${pad('FN', 4)} atoms P/R    gaps`));
+  for (const b of boards) {
+    const fpTxt = b.falsePositives > 0 ? c(C.red, pad(String(b.falsePositives), 4)) : pad(String(b.falsePositives), 4);
+    console.log(
+      `  ${pad(b.batch, 26)} ${pad(b.precision.toFixed(2), 6)} ${pad(b.recall.toFixed(2), 6)} ${fpTxt} ${pad(
+        String(b.falseNegatives),
+        4,
+      )} ${pad(`${b.atomPrecision.toFixed(2)}/${b.atomRecall.toFixed(2)}`, 12)} ${b.knownGaps || ''}`,
+    );
+  }
+
+  const disagreements = boards.flatMap((b) => b.disagreements.map((d) => ({ batch: b.batch, ...d })));
+  const hard = disagreements.filter((d) => !d.knownGap);
+  const gaps = disagreements.filter((d) => d.knownGap);
+
+  if (hard.length > 0 || verbose) {
+    rule(`Disagreements (${hard.length})`);
+    for (const d of hard) {
+      console.log(`  ${c(C.red, 'x')} ${c(C.bold, d.id)} ${c(C.dim, `[${d.batch}]`)}`);
+      console.log(`    expected ${d.expected}, got ${d.got}: ${d.detail}`);
+    }
+    if (hard.length === 0) console.log(c(C.green, '  none'));
+  }
+
+  if (gaps.length > 0) {
+    rule(`Documented gaps (${gaps.length})`);
+    for (const d of gaps) console.log(`  ${c(C.yellow, '-')} ${d.id} ${c(C.dim, `[${d.batch}]`)}: ${d.knownGap}`);
+  }
+
+  const g = gate(boards, DEFAULT_GATE);
+  rule('Gate');
+  const totFp = boards.reduce((s, b) => s + b.falsePositives, 0);
+  const totTp = boards.reduce((s, b) => s + b.truePositives, 0);
+  const totFn = boards.reduce((s, b) => s + b.falseNegatives, 0);
+  console.log(
+    `  overall precision ${(totTp / Math.max(1, totTp + totFp)).toFixed(3)}, recall ${(totTp / Math.max(1, totTp + totFn)).toFixed(
+      3,
+    )}, ${totFp} false positive(s) on faithful answers`,
+  );
+  console.log(
+    `  thresholds: precision >= ${DEFAULT_GATE.minPrecision}, recall >= ${DEFAULT_GATE.minRecall}, false positives <= ${DEFAULT_GATE.maxFalsePositives}`,
+  );
+  if (g.ok) {
+    console.log(`\n  ${c(C.green, 'PASS')}\n`);
+  } else {
+    console.log(`\n  ${c(C.red, 'FAIL')}`);
+    for (const f of g.failures) console.log(`    ${f}`);
+    console.log('');
+    process.exitCode = 1;
+  }
 }
 
 /* ------------------------------------------------------------------ seed -- */
@@ -784,6 +854,8 @@ async function main(): Promise<void> {
   switch (command) {
     case 'check':
       return runCheck(rest.find((r) => !r.startsWith('--')), rest);
+    case 'eval':
+      return runEval(rest);
     case 'demo':
       return runDemo();
     case 'seed':
@@ -817,6 +889,7 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
       console.log(`silentgreen
 
   check [file.jsonl]       verify a batch of AI work. No credentials, no setup.
+  eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store
   scan                     read an n8n instance and propose expectations

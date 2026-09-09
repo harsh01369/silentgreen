@@ -92,8 +92,40 @@ const PATTERNS: ReadonlyArray<{ kind: AtomKind; re: RegExp }> = [
   // invoice number it came from.
   { kind: 'identifier', re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
   { kind: 'number', re: /\b\d[\d,]*(?:\.\d+)?\b/g },
-  { kind: 'quote', re: /"([^"\n]{12,200})"/g },
 ];
+
+const QUOTE_RE = /["“”]([^"“”\n]{12,200})["“”]/g;
+
+/**
+ * The forms a date could be written in, as ISO strings.
+ *
+ * "03/11/2026" is the same day as "2026-11-03", and an answer that reformats a
+ * date has not invented it. Where the day and month are both 12 or less the
+ * order is genuinely ambiguous, so both readings are returned and a match on
+ * either counts. This slightly weakens detection of a fabricated date that
+ * happens to equal the swapped reading of a real one, which is the right trade:
+ * a missed catch leaves the reviewer where they were, a false accusation does not.
+ */
+function dateCandidates(raw: string): readonly string[] {
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return [`${iso[1]}-${iso[2]}-${iso[3]}`];
+
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slash) {
+    const a = Number(slash[1]);
+    const b = Number(slash[2]);
+    let y = Number(slash[3]);
+    if (y < 100) y += y < 70 ? 2000 : 1900;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const out: string[] = [];
+    // day/month/year
+    if (a >= 1 && a <= 31 && b >= 1 && b <= 12) out.push(`${y}-${pad(b)}-${pad(a)}`);
+    // month/day/year
+    if (b >= 1 && b <= 31 && a >= 1 && a <= 12) out.push(`${y}-${pad(a)}-${pad(b)}`);
+    return out.length > 0 ? out : [raw.toLowerCase()];
+  }
+  return [raw.toLowerCase()];
+}
 
 /**
  * Pull out the things in this text that are either true of the source or not.
@@ -131,10 +163,18 @@ export function extractAtoms(text: string): readonly Atom[] {
     atoms.push({ kind, text: raw, key });
   };
 
+  // Quotations come out of the original text, before anything is stripped. A
+  // number or a name inside a quotation must not be carved out from under it,
+  // or the quote is checked against the source with holes where its facts were.
+  for (const m of text.matchAll(QUOTE_RE)) {
+    const raw = m[1] ?? '';
+    if (raw) push('quote', raw, normaliseText(raw));
+  }
+
   for (const { kind, re } of PATTERNS) {
     const found: string[] = [];
     for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
-      const raw = kind === 'quote' ? (m[1] ?? '') : m[0];
+      const raw = m[0];
       if (!raw) continue;
       found.push(m[0]);
 
@@ -181,11 +221,21 @@ export function extractAtoms(text: string): readonly Atom[] {
  * number formatting ignored, and a quoted span counts as grounded if the source
  * contains it with different punctuation or line breaks.
  */
-function isPresent(atom: Atom, sourceRaw: string, sourceNormalised: string, sourceNumbers: ReadonlySet<string>): boolean {
+function isPresent(
+  atom: Atom,
+  sourceRaw: string,
+  sourceNormalised: string,
+  sourceNumbers: ReadonlySet<string>,
+  sourceDates: ReadonlySet<string>,
+): boolean {
   switch (atom.kind) {
     case 'number':
     case 'money':
       return sourceNumbers.has(atom.key);
+    case 'date': {
+      if (sourceNormalised.includes(atom.key)) return true;
+      return dateCandidates(atom.text).some((d) => sourceDates.has(d));
+    }
     case 'quote': {
       // Punctuation inside a quotation is the model's business; the words are ours.
       const words = atom.key.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -254,6 +304,11 @@ export function checkGrounding(
   const sourceNumbers = new Set<string>();
   for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
 
+  const sourceDates = new Set<string>();
+  for (const m of sourceRaw.matchAll(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g)) {
+    for (const d of dateCandidates(m[0])) sourceDates.add(d);
+  }
+
   const atoms = extractAtoms(output).filter((a) => kinds.has(a.kind));
   if (atoms.length < minAtoms) {
     return {
@@ -266,7 +321,7 @@ export function checkGrounding(
 
   const ungrounded: UngroundedAtom[] = [];
   for (const atom of atoms) {
-    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers)) {
+    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) {
       ungrounded.push({ ...atom, why: describe(atom) });
     }
   }

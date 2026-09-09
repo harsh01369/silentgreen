@@ -53,20 +53,32 @@ describe('reading whatever the pipeline exported', () => {
 
 describe('what counts as the source', () => {
   test('explicit sources are used when present', () => {
-    const { sources, note } = groundingSourcesFor({ id: 'a', input: 'q', sources: ['doc'], output: 'o' });
+    const { sources, basis, note } = groundingSourcesFor({ id: 'a', input: 'q', sources: ['doc'], output: 'o' });
     assert.deepEqual(sources, ['doc']);
+    assert.equal(basis, 'sources');
     assert.equal(note, undefined);
   });
 
-  test('with no sources the prompt is used, and the reader is told', () => {
-    const { sources, note } = groundingSourcesFor({ id: 'a', input: 'the prompt', sources: [], output: 'o' });
+  test('with no sources the prompt is a fallback, reported as such', () => {
+    const { sources, basis, note } = groundingSourcesFor({ id: 'a', input: 'the prompt', sources: [], output: 'o' });
     assert.deepEqual(sources, ['the prompt']);
-    assert.match(note ?? '', /stricter than you may want/);
+    assert.equal(basis, 'prompt');
+    assert.match(note ?? '', /unproven, not as a fabrication/);
+  });
+
+  test('a fact absent from the prompt-only fallback is unproven, not a fabrication', () => {
+    const { results } = checkBatch([
+      { id: 'a', input: 'What is the balance?', sources: [], output: 'The balance is £412.00, due 2026-10-09.' },
+    ]);
+    assert.equal(results[0]!.problems.length, 0, 'no hard problem without real source material');
+    assert.equal(results[0]!.inconclusive, true);
+    assert.match(results[0]!.inconclusiveReason ?? '', /could not be traced/);
   });
 
   test('with neither, nothing is claimed', () => {
-    const { sources, note } = groundingSourcesFor({ id: 'a', input: '', sources: [], output: 'o' });
+    const { sources, basis, note } = groundingSourcesFor({ id: 'a', input: '', sources: [], output: 'o' });
     assert.deepEqual(sources, []);
+    assert.equal(basis, 'none');
     assert.match(note ?? '', /nothing could be checked/);
   });
 });

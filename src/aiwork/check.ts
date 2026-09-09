@@ -165,12 +165,17 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
     let atomsChecked = 0;
 
     if (!opts.skipGrounding) {
-      const { sources, note } = groundingSourcesFor(record);
+      const { sources, basis, note } = groundingSourcesFor(record);
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
       if (g.inconclusive) {
         inconclusive = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
+      } else if (basis === 'prompt' && g.ungrounded.length > 0) {
+        // Checked against the prompt alone. Atoms missing from it are unproven,
+        // not fabrications, because the real source material was never captured.
+        inconclusive = problems.length === 0;
+        inconclusiveReason = `${g.ungrounded.length} fact(s) in the answer could not be traced. ${note}`;
       } else {
         for (const u of g.ungrounded) {
           problems.push({

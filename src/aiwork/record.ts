@@ -152,18 +152,23 @@ function toRecord(item: unknown, line: number, issues: ParseIssue[]): TaskRecord
 /**
  * What the model was allowed to draw on.
  *
- * When no explicit sources are given, the prompt itself is the source: an answer
- * that invents a figure absent from its own prompt has invented it, whatever
- * else is true. This is stricter than most pipelines expect, so the reason is
- * reported alongside the result rather than assumed.
+ * When no explicit sources are given, the prompt is used as a fallback, but a
+ * mismatch against the prompt alone is reported as unproven rather than as a
+ * fabrication. The material the answer should have been checked against was
+ * never captured, and that is a gap in the evidence, not proof of invention.
  */
-export function groundingSourcesFor(record: TaskRecord): { sources: readonly string[]; note?: string } {
-  if (record.sources.length > 0) return { sources: record.sources };
+export function groundingSourcesFor(record: TaskRecord): {
+  sources: readonly string[];
+  basis: 'sources' | 'prompt' | 'none';
+  note?: string;
+} {
+  if (record.sources.length > 0) return { sources: record.sources, basis: 'sources' };
   if (record.input.trim().length > 0) {
     return {
       sources: [record.input],
-      note: 'No retrieved sources were recorded, so the answer was checked against the prompt alone. Anything the model knew from training will read as ungrounded here, which is stricter than you may want.',
+      basis: 'prompt',
+      note: 'No retrieved sources were recorded, so the answer could only be checked against the prompt. Anything absent from the prompt is reported as unproven, not as a fabrication.',
     };
   }
-  return { sources: [], note: 'Neither sources nor a prompt were recorded, so nothing could be checked.' };
+  return { sources: [], basis: 'none', note: 'Neither sources nor a prompt were recorded, so nothing could be checked.' };
 }

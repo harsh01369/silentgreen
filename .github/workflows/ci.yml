@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run check
+
+      - name: tests
+        run: npm test
+
+      - name: score the checks against the labelled corpus
+        run: npm run dev -- eval
+
+      - name: build
+        run: npm run build
+
+      - name: the committed dist/ is up to date
+        run: |
+          git diff --exit-code -- dist \
+            || (echo "dist/ is stale. run 'npm run build' and commit the result." && exit 1)

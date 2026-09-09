@@ -42,12 +42,13 @@ export declare function parseTaskRecords(text: string): ParseResult;
 /**
  * What the model was allowed to draw on.
  *
- * When no explicit sources are given, the prompt itself is the source: an answer
- * that invents a figure absent from its own prompt has invented it, whatever
- * else is true. This is stricter than most pipelines expect, so the reason is
- * reported alongside the result rather than assumed.
+ * When no explicit sources are given, the prompt is used as a fallback, but a
+ * mismatch against the prompt alone is reported as unproven rather than as a
+ * fabrication. The material the answer should have been checked against was
+ * never captured, and that is a gap in the evidence, not proof of invention.
  */
 export declare function groundingSourcesFor(record: TaskRecord): {
     sources: readonly string[];
+    basis: 'sources' | 'prompt' | 'none';
     note?: string;
 };

@@ -82,6 +82,23 @@ Whether the answer is wise, complete or appropriate. A clean result is not a cla
 work was good. It is a narrower promise than the rest of this market makes, and it is one
 that can be kept.
 
+### How the checks are scored
+
+```
+npm run dev -- eval
+```
+
+Every check runs against a labelled corpus and the result is scored task by task. The
+metric that gates a change is not accuracy, it is the count of faithful answers wrongly
+flagged, which must be zero. A change that improves recall but flags one correct answer
+fails.
+
+The corpus today is entirely synthetic. It was written to pin down intended behaviour,
+including adversarial cases (a transposed figure, a date written day-first, a quotation
+repunctuated, a name that opens a sentence), so the numbers say the engine behaves the way
+its author meant and nothing stronger. They become evidence when real, third-party batches
+replace the fixtures. That swap is tracked as the first item in [SYSTEM-PLAN.md](SYSTEM-PLAN.md).
+
 ---
 
 ## The same failure, in automations

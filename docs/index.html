@@ -525,16 +525,17 @@ npx github:harsh01369/silentgreen report --out record.html</pre>
   /* Wrap each invented fact in a mark. Longest first, via placeholders, so a
      short atom sitting inside a longer one cannot split it. Everything is
      escaped before it goes near innerHTML. */
+  var SENT = '\uE000';
   var atoms = ai.fabricated.ungrounded.slice().sort(function (a, b) { return b.text.length - a.text.length; });
   var html = esc(ai.fabricated.output);
   atoms.forEach(function (a, i) {
     var needle = esc(a.text);
     var idx = html.indexOf(needle);
     if (idx === -1) return;
-    html = html.slice(0, idx) + ' ' + i + ' ' + html.slice(idx + needle.length);
+    html = html.slice(0, idx) + SENT + i + SENT + html.slice(idx + needle.length);
   });
   atoms.forEach(function (a, i) {
-    html = html.split(' ' + i + ' ').join('<mark>' + esc(a.text) + '</mark>');
+    html = html.split(SENT + i + SENT).join('<mark>' + esc(a.text) + '</mark>');
   });
   answerEl.innerHTML = html;
 

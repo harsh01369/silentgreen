@@ -37,6 +37,22 @@ describe('an answer that came from the source', () => {
     const r = checkGrounding('We reviewed the account for fernweh supply ltd.', [INVOICE]);
     assert.deepEqual(keys(r), []);
   });
+
+  test('a reformatted date is the same date', () => {
+    const r = checkGrounding('The invoice is due on 13/09/2026.', [INVOICE]);
+    assert.deepEqual(keys(r), [], 'day-first 13/09/2026 is the ISO 2026-09-13 in the source');
+  });
+
+  test('a genuinely different date is still caught', () => {
+    const r = checkGrounding('The invoice is due on 30/09/2026.', [INVOICE]);
+    assert.deepEqual(keys(r), ['30/09/2026']);
+  });
+
+  test('a number inside a quotation is not carved out from under it', () => {
+    const source = 'Policy: refunds are issued within 14 days of the return being received.';
+    const r = checkGrounding('The policy says "refunds are issued within 14 days" here.', [source]);
+    assert.deepEqual(keys(r), [], 'the quote must be checked whole, with its 14 intact');
+  });
 });
 
 describe('an answer the model made up', () => {
