@@ -1372,6 +1372,7 @@ function canonical(v) {
   const entries = Object.keys(obj).filter((k) => obj[k] !== void 0).sort().map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`);
   return `{${entries.join(",")}}`;
 }
+var SEP = String.fromCharCode(0);
 function hashEntry(e) {
   const material = [
     String(e.seq),
@@ -1381,7 +1382,7 @@ function hashEntry(e) {
     e.clientId ?? "",
     canonical(e.payload),
     e.prevHash
-  ].join("\0");
+  ].join(SEP);
   return createHash2("sha256").update(material).digest("hex");
 }
 var Ledger = class {

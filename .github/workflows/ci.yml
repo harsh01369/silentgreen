@@ -32,3 +32,22 @@ jobs:
         run: |
           git diff --exit-code -- dist \
             || (echo "dist/ is stale. run 'npm run build' and commit the result." && exit 1)
+
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: typecheck
+        run: npm run check
+      - name: the generated migration matches the schema
+        run: |
+          DATABASE_URL="postgresql://x:x@localhost:5432/x" npx drizzle-kit generate
+          git diff --exit-code -- drizzle \
+            || (echo "drizzle/ is stale. run 'npm run db:generate' and commit." && exit 1)
