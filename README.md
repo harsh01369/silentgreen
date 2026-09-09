@@ -163,10 +163,39 @@ npx github:harsh01369/silentgreen review        # http://127.0.0.1:4666
 
 # 3. check recent runs against what you confirmed
 npx github:harsh01369/silentgreen verify        # exits 1 on a violation, so cron works
+npx github:harsh01369/silentgreen watch         # or keep it running, and alert on change
 
 # 4. produce the record you can forward
 npx github:harsh01369/silentgreen report --out record.html
 ```
+
+### Alerting
+
+Absence detection needs a clock, so `watch` is one. It re-checks on an interval and tells
+somebody when the answer changes.
+
+```bash
+export SILENTGREEN_SLACK_WEBHOOK=https://hooks.slack.com/services/...
+export SILENTGREEN_DISCORD_WEBHOOK=...     # or Teams, or a generic JSON webhook
+npx github:harsh01369/silentgreen watch --interval 300
+```
+
+The part that matters is when it stays quiet:
+
+- A **new** failure alerts once, with the statement, the detail and the captured value.
+- The **same** failure does not alert again for 24 hours, because the third identical
+  message is what teaches somebody to filter the channel, and a filtered channel is worse
+  than no alerting: everybody believes they are covered.
+- **Recovery** alerts once, because "it is fixed" is information.
+- **`unproven` never alerts.** A check going stale is a coverage gap for the review queue,
+  not an incident for somebody's evening. Nor does it close an open one: losing sight of a
+  problem is not the same as fixing it.
+- A **delivery failure is printed and written to the ledger**. A rotated webhook that now
+  returns 404 must not leave the tool reporting that somebody was told, which would be this
+  product's own subject matter one level up.
+
+`watch` also states on startup how many checks are actually live, and says plainly when the
+answer is none, rather than printing a reassuring `0 violated` forever.
 
 `scan` reads your workflows and recent executions, works out where output leaves the
 system, and proposes expectations with the basis and reasoning for each. Nothing it
@@ -225,6 +254,10 @@ becomes `npx silentgreen`.
 - The evidence ledger is a hash chain in a file you control. It makes accidental
   corruption, editing and deletion detectable. It is not a claim against a determined
   operator who owns the file, and is not presented as one.
+- There is no hosted service. The tool is complete for self-hosting, and everything an
+  earlier version of the landing page advertised at 29 pounds a month now ships free,
+  because charging for it while it did not exist would have been this project's own
+  argument used against it.
 - Make.com support is a connector away: the verification core is platform-agnostic and
   the Make API exposes scenarios, logs and per-execution detail. It is not written yet.
 
@@ -232,7 +265,7 @@ becomes `npx silentgreen`.
 
 ```bash
 npm install
-npm test          # 109 tests
+npm test          # 128 tests
 npm run check     # tsc --noEmit
 npx tsx src/cli.ts demo
 ```

@@ -1699,7 +1699,7 @@ var LEDGER_FILE = "ledger.jsonl";
 var STATE_VERSION = 1;
 var SAMPLES_PER_SINK = 4;
 function emptyState() {
-  return { version: STATE_VERSION, workflows: {}, assertions: [], clients: {} };
+  return { version: STATE_VERSION, workflows: {}, assertions: [], clients: {}, alerts: {} };
 }
 var Store = class {
   constructor(dir = STORE_DIR) {
@@ -1714,6 +1714,7 @@ var Store = class {
           `${path} could not be parsed, so the confirmed expectations cannot be read. Move it aside and rescan rather than continuing, because a store that half-loads is worse than none. (${String(err)})`
         );
       }
+      if (!this.state.alerts) this.state.alerts = {};
       if (this.state.version !== STATE_VERSION) {
         throw new Error(`${path} was written by a different version of this tool (found ${this.state.version}, expected ${STATE_VERSION}).`);
       }
@@ -1741,6 +1742,12 @@ var Store = class {
   }
   assertion(id) {
     return this.state.assertions.find((a) => a.id === id);
+  }
+  alerts() {
+    return this.state.alerts;
+  }
+  setAlerts(next) {
+    this.state.alerts = { ...next };
   }
   clients() {
     return this.state.clients;
@@ -2511,6 +2518,164 @@ async function handle(req, res, storeDir) {
   json(res, 404, { error: "Not found." });
 }
 
+// src/alert/state.ts
+var DEFAULT_REMINDER_HOURS = 24;
+var HOUR_MS = 36e5;
+function decideAlerts(results, previous, now, reminderHours = DEFAULT_REMINDER_HOURS) {
+  const actions = [];
+  const next = {};
+  const seen = /* @__PURE__ */ new Set();
+  for (const r of results) {
+    seen.add(r.assertionId);
+    const existing = previous[r.assertionId];
+    if (r.verdict !== "violated") {
+      if (existing && r.verdict === "proven") {
+        actions.push({
+          kind: "resolved",
+          assertionId: r.assertionId,
+          statement: r.statement,
+          wasFailingHours: hoursBetween(existing.firingSince, now)
+        });
+        continue;
+      }
+      if (existing) next[r.assertionId] = existing;
+      continue;
+    }
+    if (!existing) {
+      actions.push({ kind: "opened", assertionId: r.assertionId, result: r });
+      next[r.assertionId] = {
+        firingSince: now.toISOString(),
+        lastNotifiedAt: now.toISOString(),
+        notifications: 1,
+        lastDetail: r.detail
+      };
+      continue;
+    }
+    const sinceLast = (now.getTime() - Date.parse(existing.lastNotifiedAt)) / HOUR_MS;
+    if (sinceLast >= reminderHours) {
+      actions.push({
+        kind: "still-failing",
+        assertionId: r.assertionId,
+        result: r,
+        sinceHours: hoursBetween(existing.firingSince, now)
+      });
+      next[r.assertionId] = {
+        ...existing,
+        lastNotifiedAt: now.toISOString(),
+        notifications: existing.notifications + 1,
+        lastDetail: r.detail
+      };
+    } else {
+      next[r.assertionId] = { ...existing, lastDetail: r.detail };
+    }
+  }
+  for (const [id, rec] of Object.entries(previous)) {
+    if (!seen.has(id) && !next[id]) next[id] = rec;
+  }
+  return { actions, state: next };
+}
+function hoursBetween(iso, now) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, (now.getTime() - t) / HOUR_MS);
+}
+function worstPerAssertion(results) {
+  const rank = { violated: 3, unproven: 2, proven: 1 };
+  const best = /* @__PURE__ */ new Map();
+  for (const r of results) {
+    const cur = best.get(r.assertionId);
+    if (!cur || rank[r.verdict] > rank[cur.verdict]) best.set(r.assertionId, r);
+  }
+  return [...best.values()];
+}
+
+// src/alert/notify.ts
+function channelsFromEnv(env = process.env) {
+  const out = [];
+  if (env.SILENTGREEN_SLACK_WEBHOOK) out.push({ kind: "slack", url: env.SILENTGREEN_SLACK_WEBHOOK });
+  if (env.SILENTGREEN_DISCORD_WEBHOOK) out.push({ kind: "discord", url: env.SILENTGREEN_DISCORD_WEBHOOK });
+  if (env.SILENTGREEN_TEAMS_WEBHOOK) out.push({ kind: "teams", url: env.SILENTGREEN_TEAMS_WEBHOOK });
+  if (env.SILENTGREEN_WEBHOOK) out.push({ kind: "webhook", url: env.SILENTGREEN_WEBHOOK });
+  return out;
+}
+function renderText(action, ctx) {
+  const where = ctx.clientName ? `${ctx.clientName} / ${ctx.workflowName}` : ctx.workflowName;
+  if (action.kind === "resolved") {
+    return [
+      `Recovered: ${where}`,
+      `"${action.statement}" is holding again after ${formatHours(action.wasFailingHours)}.`
+    ].join("\n");
+  }
+  const r = action.result;
+  const head = action.kind === "opened" ? `Silent failure: ${where}` : `Still failing after ${formatHours(action.sinceHours)}: ${where}`;
+  const lines = [head, `"${r.statement}"`];
+  if (r.detail) lines.push(r.detail);
+  if (r.evidence) lines.push(`Captured: ${truncate(r.evidence, 300)}`);
+  lines.push(
+    r.basis === "observation" ? "This expectation was learned from history against an attested baseline." : `This expectation came from ${r.basis === "intent" ? "a stated business intent" : "the workflow's own definition"}.`
+  );
+  return lines.join("\n");
+}
+function truncate(s, n) {
+  return s.length > n ? `${s.slice(0, n - 1)}\u2026` : s;
+}
+function formatHours(h) {
+  if (h < 1) return `${Math.max(1, Math.round(h * 60))} minutes`;
+  if (h < 48) return `${h.toFixed(1)} hours`;
+  return `${(h / 24).toFixed(1)} days`;
+}
+function bodyFor(kind, action, ctx) {
+  const text = renderText(action, ctx);
+  switch (kind) {
+    case "slack":
+      return { text };
+    case "discord":
+      return { content: truncate(text, 1900) };
+    case "teams":
+      return { text };
+    case "webhook":
+      return {
+        kind: action.kind,
+        workflow: ctx.workflowName,
+        client: ctx.clientName,
+        assertionId: action.assertionId,
+        statement: action.kind === "resolved" ? action.statement : action.result.statement,
+        detail: action.kind === "resolved" ? void 0 : action.result.detail,
+        evidence: action.kind === "resolved" ? void 0 : action.result.evidence,
+        basis: action.kind === "resolved" ? void 0 : action.result.basis,
+        text,
+        at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+  }
+}
+async function send(channels, action, ctx, opts = {}) {
+  const f = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? 1e4;
+  const results = [];
+  for (const ch of channels) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await f(ch.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(bodyFor(ch.kind, action, ctx)),
+        signal: ac.signal
+      });
+      results.push({ channel: ch.kind, ok: res.ok, status: res.status });
+    } catch (err) {
+      results.push({
+        channel: ch.kind,
+        ok: false,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return results;
+}
+
 // src/cli.ts
 try {
   process.loadEnvFile(".env");
@@ -2797,7 +2962,7 @@ ${workflows.length} workflow(s) visible to this key.
   silentgreen review
 `);
 }
-async function runVerify(storeDir) {
+async function runVerify(storeDir, opts = {}) {
   const store = new Store(storeDir);
   const workflows = store.workflows();
   if (workflows.length === 0) {
@@ -2805,10 +2970,24 @@ async function runVerify(storeDir) {
     process.exitCode = 1;
     return;
   }
+  const outcome = await verifyCycle(store, { quiet: opts.quiet });
+  if (opts.notify) {
+    await dispatchAlerts(store, outcome, channelsFromEnv());
+  }
+  store.save();
+  if (!opts.quiet) {
+    console.log(c(C.dim, `Recorded in ${storeDir}/ledger.jsonl. Exit code is 1 when anything was violated, so this fits a cron job.`));
+  }
+  if (outcome.anyViolation) process.exitCode = 1;
+}
+async function verifyCycle(store, opts = {}) {
+  const workflows = store.workflows();
   const baseUrl = process.env.N8N_URL;
   const apiKey = process.env.N8N_API_KEY;
   const client = baseUrl && apiKey ? new N8nClient({ baseUrl, apiKey }) : void 0;
   let anyViolation = false;
+  const allResults = [];
+  const context = /* @__PURE__ */ new Map();
   for (const wf of workflows) {
     const confirmed = store.assertions(wf.id).filter((a) => a.status === "confirmed");
     const isWorkedExample = wf.id === DEMO_WORKFLOW_ID;
@@ -2821,8 +3000,10 @@ async function runVerify(storeDir) {
     } else if (client) {
       runs = await client.listRuns(wf.id, { limit: 50, includeData: true });
     } else {
-      console.log(`${c(C.bold, wf.name)}`);
-      console.log(c(C.yellow, "  Skipped: no N8N_URL and N8N_API_KEY, so recent runs could not be fetched."));
+      if (!opts.quiet) {
+        console.log(`${c(C.bold, wf.name)}`);
+        console.log(c(C.yellow, "  Skipped: no N8N_URL and N8N_API_KEY, so recent runs could not be fetched."));
+      }
       continue;
     }
     const result = audit({
@@ -2834,11 +3015,22 @@ async function runVerify(storeDir) {
       now,
       cadenceShape: wf.cadenceShape
     });
-    console.log(`${c(C.bold, wf.name)}${isWorkedExample ? c(C.dim, "  (worked example, fabricated data)") : ""}`);
-    console.log(`  ${result.headline}`);
-    console.log(
-      `  proven ${c(C.green, String(result.counts.proven))}  violated ${c(C.red, String(result.counts.violated))}  unproven ${c(C.yellow, String(result.counts.unproven))}`
-    );
+    const clientName = wf.clientId ? store.clients()[wf.clientId]?.name ?? wf.clientId : void 0;
+    for (const r of result.perRun.flatMap((p) => p.results)) {
+      allResults.push(r);
+      context.set(r.assertionId, { workflowName: wf.name, clientName });
+    }
+    if (result.cadence) {
+      allResults.push(result.cadence);
+      context.set(result.cadence.assertionId, { workflowName: wf.name, clientName });
+    }
+    if (!opts.quiet) {
+      console.log(`${c(C.bold, wf.name)}${isWorkedExample ? c(C.dim, "  (worked example, fabricated data)") : ""}`);
+      console.log(`  ${result.headline}`);
+      console.log(
+        `  proven ${c(C.green, String(result.counts.proven))}  violated ${c(C.red, String(result.counts.violated))}  unproven ${c(C.yellow, String(result.counts.unproven))}`
+      );
+    }
     for (const v of result.violations) {
       store.ledger.append(
         v.result.verdict === "violated" && !v.runId ? "absence-detected" : "violation",
@@ -2860,11 +3052,90 @@ async function runVerify(storeDir) {
       { clientId: wf.clientId }
     );
     if (result.counts.violated > 0) anyViolation = true;
-    printFindings(result);
+    if (!opts.quiet) printFindings(result);
   }
-  store.save();
-  console.log(c(C.dim, `Recorded in ${storeDir}/ledger.jsonl. Exit code is 1 when anything was violated, so this fits a cron job.`));
-  if (anyViolation) process.exitCode = 1;
+  return { anyViolation, results: allResults, context };
+}
+async function dispatchAlerts(store, outcome, channels) {
+  const perAssertion = worstPerAssertion(outcome.results);
+  const { actions, state } = decideAlerts(perAssertion, store.alerts(), /* @__PURE__ */ new Date());
+  store.setAlerts(state);
+  if (actions.length === 0) return;
+  if (channels.length === 0) {
+    console.log(
+      c(C.yellow, `
+${actions.length} alert(s) would have been sent, but no channel is configured.`)
+    );
+    console.log(c(C.dim, "  Set SILENTGREEN_SLACK_WEBHOOK, SILENTGREEN_DISCORD_WEBHOOK, SILENTGREEN_TEAMS_WEBHOOK"));
+    console.log(c(C.dim, "  or SILENTGREEN_WEBHOOK. Nothing is being delivered until you do, and this tool"));
+    console.log(c(C.dim, "  will not pretend otherwise."));
+    for (const a of actions) {
+      const ctx = outcome.context.get(a.assertionId) ?? { workflowName: "unknown workflow" };
+      console.log(`
+${renderText(a, ctx)}`);
+    }
+    return;
+  }
+  for (const action of actions) {
+    const ctx = outcome.context.get(action.assertionId) ?? { workflowName: "unknown workflow" };
+    const delivery = await send(channels, action, ctx);
+    const failed = delivery.filter((d) => !d.ok);
+    store.ledger.append("note", "alerting", {
+      alert: action.kind,
+      assertionId: action.assertionId,
+      workflow: ctx.workflowName,
+      delivered: delivery.filter((d) => d.ok).map((d) => d.channel),
+      failed: failed.map((d) => ({ channel: d.channel, status: d.status, error: d.error }))
+    });
+    const label = action.kind === "resolved" ? c(C.green, "recovered") : c(C.red, action.kind);
+    console.log(`  alert ${label}: ${ctx.workflowName}`);
+    for (const f of failed) {
+      console.log(
+        c(C.red, `    delivery to ${f.channel} FAILED${f.status ? ` (HTTP ${f.status})` : ""}${f.error ? `: ${f.error}` : ""}`)
+      );
+    }
+  }
+}
+async function runWatch(storeDir, intervalSeconds) {
+  const channels = channelsFromEnv();
+  const opening = new Store(storeDir);
+  const live = opening.assertions().filter((a) => a.status === "confirmed").length;
+  const stale = opening.assertions().filter((a) => a.status === "stale").length;
+  const waiting = opening.assertions().filter((a) => a.status === "proposed").length;
+  console.log(`
+${c(C.bold, "silentgreen watch")}
+
+Checking every ${intervalSeconds >= 60 ? `${Math.round(intervalSeconds / 60)} minutes` : `${intervalSeconds} seconds`}, reading ${storeDir}/.
+${opening.workflows().length} workflow(s), ${live} live check(s)${stale ? `, ${stale} stale` : ""}${waiting ? `, ${waiting} waiting for review` : ""}.
+${channels.length > 0 ? `Alerting to: ${channels.map((ch) => ch.kind).join(", ")}.` : c(C.yellow, "No alert channel is configured, so nothing will be delivered. Alerts will be printed here instead.")}
+Press Ctrl+C to stop.
+`);
+  if (live === 0) {
+    console.log(c(C.yellow, "Nothing is confirmed, so this will watch and find nothing, every cycle, forever."));
+    console.log(c(C.yellow, `Confirm something first: silentgreen review${waiting ? ` (${waiting} waiting)` : ""}`));
+    console.log("");
+  }
+  let cycle = 0;
+  for (; ; ) {
+    cycle += 1;
+    const startedAt = /* @__PURE__ */ new Date();
+    try {
+      const store = new Store(storeDir);
+      const outcome = await verifyCycle(store, { quiet: true });
+      await dispatchAlerts(store, outcome, channels);
+      store.save();
+      const worst2 = worstPerAssertion(outcome.results);
+      const violated2 = worst2.filter((r) => r.verdict === "violated").length;
+      const unproven2 = worst2.filter((r) => r.verdict === "unproven").length;
+      const proven2 = worst2.filter((r) => r.verdict === "proven").length;
+      console.log(
+        `${startedAt.toISOString().slice(11, 19)}  cycle ${cycle}: ${c(C.green, String(proven2))} proven, ${c(C.red, String(violated2))} violated, ${c(C.yellow, String(unproven2))} unproven`
+      );
+    } catch (err) {
+      console.error(c(C.red, `${startedAt.toISOString().slice(11, 19)}  cycle ${cycle} failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1e3));
+  }
 }
 async function runReport(storeDir, outPath, clientFilter) {
   const store = new Store(storeDir);
@@ -2959,7 +3230,9 @@ async function main() {
     case "scan":
       return runScan(storeDir);
     case "verify":
-      return runVerify(storeDir);
+      return runVerify(storeDir, { notify: rest.includes("--notify") });
+    case "watch":
+      return runWatch(storeDir, Number(arg(rest, "--interval") ?? 300));
     case "status":
       return runStatus(storeDir);
     case "review": {
@@ -2985,12 +3258,19 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
   seed                     load that example into a local store
   scan                     read an n8n instance and propose expectations
   review [--port 4666]     open the review interface to confirm them
-  verify                   check recent runs against confirmed expectations
+  verify [--notify]        check recent runs against confirmed expectations
+  watch [--interval 300]   keep checking, and alert when something changes
   report [--out f.html]    produce the client evidence record
   status                   what is in the store
 
   --store DIR              where to keep state (default ${STORE_DIR}/)
   N8N_URL, N8N_API_KEY     read-only credentials for scan and verify
+
+  Alert channels, all optional, all plain webhooks:
+    SILENTGREEN_SLACK_WEBHOOK
+    SILENTGREEN_DISCORD_WEBHOOK
+    SILENTGREEN_TEAMS_WEBHOOK
+    SILENTGREEN_WEBHOOK      generic JSON POST
 `);
       return;
     default:

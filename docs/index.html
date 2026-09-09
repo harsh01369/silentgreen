@@ -176,6 +176,8 @@
   .plan .price small { font-size: 14px; font-weight: 400; color: var(--ink-faint); letter-spacing: 0; }
   .plan ul { margin: 0; padding: 0; list-style: none; font-size: 14.5px; color: var(--ink-soft); }
   .plan li { padding: 5px 0 5px 16px; position: relative; }
+  .plan .plannote { margin: 14px 0 0; font-size: 13.5px; color: var(--ink-faint); max-width: none; }
+  .plan .plannote-warn { color: var(--amber); }
   .plan li::before { content: ""; position: absolute; left: 0; top: 13px; width: 7px; height: 1px; background: var(--ink-faint); }
 
   figure.shot { margin: 0; border: 1px solid var(--rule); background: var(--panel); padding: 10px; }
@@ -359,6 +361,7 @@ export N8N_API_KEY=n8n_api_...
 npx github:harsh01369/silentgreen scan
 npx github:harsh01369/silentgreen review
 npx github:harsh01369/silentgreen verify   <span class="c"># exits 1 on a violation, so it fits a cron job</span>
+npx github:harsh01369/silentgreen watch    <span class="c"># or keep it running, and alert on change</span>
 npx github:harsh01369/silentgreen report --out record.html</pre>
     <p style="color:var(--ink-soft)">
       <code style="font-family:var(--mono);font-size:13.5px">scan</code> proposes expectations and explains where each one came from.
@@ -370,41 +373,48 @@ npx github:harsh01369/silentgreen report --out record.html</pre>
   </section>
 
   <section>
-    <h2>What it costs</h2>
+    <h2>What it costs, and what does not exist yet</h2>
     <p class="lede">
-      The engine is open source and stays that way. What is worth paying for is the part that
-      runs continuously, keeps the evidence, and produces the record your client reads.
+      An earlier version of this page advertised two monthly plans. Every feature they
+      promised now ships in the free tool, and the hosted service they implied was not built.
+      Charging for it would have been the exact thing this product argues against, so here is
+      the honest version instead.
     </p>
     <div class="plans">
       <div class="plan">
         <h3>Self-hosted</h3>
-        <div class="price">Free<small> forever</small></div>
+        <div class="price">Free<small> forever, MIT</small></div>
         <ul>
-          <li>Every check in this page</li>
-          <li>The CLI, on your own schedule</li>
-          <li>Local evidence ledger</li>
-          <li>MIT licensed</li>
+          <li>Every check described on this page</li>
+          <li>The review queue</li>
+          <li>Alerts to Slack, Discord, Teams or any webhook</li>
+          <li><code>watch</code>, so absence detection has a clock</li>
+          <li>Client separation and the evidence record</li>
         </ul>
+        <p class="plannote">This is the whole product. It runs on any box you already have.</p>
       </div>
       <div class="plan">
         <h3>Hosted</h3>
-        <div class="price">£29<small> / month</small></div>
+        <div class="price">Not built<small> yet</small></div>
         <ul>
-          <li>25 workflows, checked continuously</li>
-          <li>Absence detection with a real clock</li>
-          <li>Alerts to Slack or email</li>
-          <li>Contract review queue</li>
+          <li>The same thing, without a box to maintain</li>
+          <li>Accounts, teams, retention</li>
+          <li>A clock somebody else keeps running</li>
         </ul>
+        <p class="plannote plannote-warn">There is no signup button here because there is nothing
+        to sign up to. If you want this, say so on the GitHub issue and I will know it is worth
+        building.</p>
       </div>
       <div class="plan">
-        <h3>Agency</h3>
-        <div class="price">£99<small> / month</small></div>
+        <h3>Set-up and monthly record</h3>
+        <div class="price">£400<small> to £900, then £150+/client</small></div>
         <ul>
-          <li>Unlimited workflows, separated by client</li>
-          <li>Monthly evidence record per client</li>
-          <li>Hash-chained, exportable, your branding</li>
-          <li>The document that answers "what am I paying for"</li>
+          <li>I point it at your instance with you</li>
+          <li>We work the review queue together, so the attestations are real</li>
+          <li>You get the first evidence record and the process to repeat it</li>
         </ul>
+        <p class="plannote">A service, available now, because it needs no infrastructure that
+        does not already exist.</p>
       </div>
     </div>
   </section>

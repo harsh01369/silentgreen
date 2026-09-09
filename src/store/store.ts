@@ -24,6 +24,7 @@ import type { N8nWorkflowDoc } from '../graph/hash';
 import { diffWorkflows, type Change } from '../graph/hash';
 import { Ledger } from '../ledger/chain';
 import { confirmAssertion, type Refusal } from '../contract/circularity';
+import type { AlertRecord, AlertState } from '../alert/state';
 
 export const STORE_DIR = '.silentgreen';
 const STATE_FILE = 'state.json';
@@ -73,10 +74,16 @@ export interface StateShape {
   workflows: Record<string, StoredWorkflow>;
   assertions: Assertion[];
   clients: Record<string, { name: string }>;
+  /**
+   * Which checks are currently the subject of an open alert, so a failure that
+   * lasts a fortnight produces a handful of messages rather than a fortnight of
+   * them. Keyed by assertion id.
+   */
+  alerts: Record<string, AlertRecord>;
 }
 
 function emptyState(): StateShape {
-  return { version: STATE_VERSION, workflows: {}, assertions: [], clients: {} };
+  return { version: STATE_VERSION, workflows: {}, assertions: [], clients: {}, alerts: {} };
 }
 
 export class Store {
@@ -97,6 +104,7 @@ export class Store {
             `Move it aside and rescan rather than continuing, because a store that half-loads is worse than none. (${String(err)})`,
         );
       }
+      if (!this.state.alerts) this.state.alerts = {};
       if (this.state.version !== STATE_VERSION) {
         throw new Error(`${path} was written by a different version of this tool (found ${this.state.version}, expected ${STATE_VERSION}).`);
       }
@@ -129,6 +137,14 @@ export class Store {
 
   assertion(id: string): Assertion | undefined {
     return this.state.assertions.find((a) => a.id === id);
+  }
+
+  alerts(): AlertState {
+    return this.state.alerts;
+  }
+
+  setAlerts(next: AlertState): void {
+    this.state.alerts = { ...next };
   }
 
   clients(): Record<string, { name: string }> {

@@ -6,6 +6,7 @@
  *   silentgreen scan      read an n8n instance, record it, propose expectations
  *   silentgreen review    open the review interface to confirm or refuse them
  *   silentgreen verify    check recent runs against confirmed expectations
+ *   silentgreen watch     keep checking on a timer, and alert when something changes
  *   silentgreen report    produce the client evidence record
  *   silentgreen status    what is in the store, in one screen
  */

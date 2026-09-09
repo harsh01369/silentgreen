@@ -21,6 +21,7 @@ import type { N8nWorkflowDoc } from '../graph/hash';
 import { type Change } from '../graph/hash';
 import { Ledger } from '../ledger/chain';
 import { type Refusal } from '../contract/circularity';
+import type { AlertRecord, AlertState } from '../alert/state';
 export declare const STORE_DIR = ".silentgreen";
 export interface StoredWorkflow {
     readonly id: string;
@@ -72,6 +73,12 @@ export interface StateShape {
     clients: Record<string, {
         name: string;
     }>;
+    /**
+     * Which checks are currently the subject of an open alert, so a failure that
+     * lasts a fortnight produces a handful of messages rather than a fortnight of
+     * them. Keyed by assertion id.
+     */
+    alerts: Record<string, AlertRecord>;
 }
 export declare class Store {
     readonly dir: string;
@@ -83,6 +90,8 @@ export declare class Store {
     workflow(id: string): StoredWorkflow | undefined;
     assertions(workflowId?: string): readonly Assertion[];
     assertion(id: string): Assertion | undefined;
+    alerts(): AlertState;
+    setAlerts(next: AlertState): void;
     clients(): Record<string, {
         name: string;
     }>;
