@@ -178,6 +178,9 @@
   .plan li { padding: 5px 0 5px 16px; position: relative; }
   .plan li::before { content: ""; position: absolute; left: 0; top: 13px; width: 7px; height: 1px; background: var(--ink-faint); }
 
+  figure.shot { margin: 0; border: 1px solid var(--rule); background: var(--panel); padding: 10px; }
+  figure.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--rule-soft); }
+
   ul.plain { padding-left: 18px; max-width: 66ch; }
   ul.plain li { margin-bottom: 9px; }
 
@@ -304,6 +307,24 @@
   </section>
 
   <section>
+    <h2>Where that question gets asked</h2>
+    <p class="lede">
+      A review queue that runs locally against a store on your own disk. It shows you the real
+      captured values an expectation will be judging before you take responsibility for it, and
+      states plainly what a green result there will and will not prove.
+    </p>
+    <figure class="shot">
+      <img src="review.png" width="1400" alt="The silentgreen review queue. A workflow in the sidebar reading 10 to review, 0 live. A banner: nothing is being verified on this workflow, any green you see elsewhere is the platform reporting that code ran, not that work happened. Below, proposed expectations, each showing what a green result proves, what it does not prove, and the real captured JSON the check would judge.">
+    </figure>
+    <p style="color:var(--ink-soft)">
+      The attestation box is validated by the same function the gate uses rather than a copy of
+      its rules in the browser, so the interface cannot promise something the gate will refuse.
+      Confirmations, refusals and retirements all enter the evidence log with the name of the
+      person who made them.
+    </p>
+  </section>
+
+  <section>
     <h2>Checks do not rot. They go stale, loudly.</h2>
     <p class="lede">
       Somebody adds a retry to one node. Every expectation was confirmed against the previous
@@ -325,16 +346,26 @@
       Read-only. There is no code path in this tool that writes to, activates or deletes
       anything on your platform. The worked example above needs no credentials at all.
     </p>
-    <pre class="cmd"><span class="c"># the worked example, no account needed</span>
+    <pre class="cmd"><span class="c"># the worked example, printed. No account, no key.</span>
 npx github:harsh01369/silentgreen demo
 
-<span class="c"># your own n8n, read-only API key</span>
+<span class="c"># load that example into a local store and review it</span>
+npx github:harsh01369/silentgreen seed
+npx github:harsh01369/silentgreen review
+
+<span class="c"># or your own n8n, with a read-only API key</span>
 export N8N_URL=https://your-n8n.example
 export N8N_API_KEY=n8n_api_...
-npx github:harsh01369/silentgreen scan</pre>
+npx github:harsh01369/silentgreen scan
+npx github:harsh01369/silentgreen review
+npx github:harsh01369/silentgreen verify   <span class="c"># exits 1 on a violation, so it fits a cron job</span>
+npx github:harsh01369/silentgreen report --out record.html</pre>
     <p style="color:var(--ink-soft)">
-      <code style="font-family:var(--mono);font-size:13.5px">scan</code> proposes contracts and explains where each one came from.
-      Nothing it proposes can raise an alert until you confirm it.
+      <code style="font-family:var(--mono);font-size:13.5px">scan</code> proposes expectations and explains where each one came from.
+      Nothing it proposes can raise anything until you confirm it in
+      <code style="font-family:var(--mono);font-size:13.5px">review</code>. State lives in a
+      <code style="font-family:var(--mono);font-size:13.5px">.silentgreen/</code> directory of plain
+      JSON you can read, diff and delete.
     </p>
   </section>
 

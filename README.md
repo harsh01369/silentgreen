@@ -148,17 +148,51 @@ the same executions after one node is edited:
 
 Nothing turned green, and nothing kept accusing.
 
-## Against your own instance
+## The loop
 
 ```bash
+# 1. load the worked example into a local store, or scan a real instance
+npx github:harsh01369/silentgreen seed
+#   ...or:
 export N8N_URL=https://your-n8n.example
 export N8N_API_KEY=n8n_api_...        # Settings, n8n API. Read access is enough.
 npx github:harsh01369/silentgreen scan
+
+# 2. confirm or refuse what it proposed, in a local review queue
+npx github:harsh01369/silentgreen review        # http://127.0.0.1:4666
+
+# 3. check recent runs against what you confirmed
+npx github:harsh01369/silentgreen verify        # exits 1 on a violation, so cron works
+
+# 4. produce the record you can forward
+npx github:harsh01369/silentgreen report --out record.html
 ```
 
 `scan` reads your workflows and recent executions, works out where output leaves the
-system, and proposes contracts with the basis and reasoning for each. Nothing it proposes
-can raise an alert until you confirm it.
+system, and proposes expectations with the basis and reasoning for each. Nothing it
+proposes can raise anything until you confirm it.
+
+`review` is where that happens. It shows the real captured values an expectation will be
+judging, what a green result there does and does not prove, and for anything learned from
+history, the attestation box. That box is validated by the same function the gate uses
+rather than a copy of its rules in the browser, so the interface cannot promise something
+the gate will refuse.
+
+Re-running `scan` after somebody edits a workflow stales every confirmed expectation bound
+to the old revision, records what moved, and those checks then report `unproven` until a
+person re-reads them.
+
+### Where state lives
+
+A `.silentgreen/` directory beside wherever you run it:
+
+```
+.silentgreen/state.json     workflows, expectations, confirmations. Plain JSON.
+.silentgreen/ledger.jsonl   append-only, hash-chained evidence log.
+```
+
+Readable, diffable, committable, deletable. If you remove it you lose the history of what
+was confirmed and nothing else breaks. Use `--store DIR` to put it somewhere else.
 
 **It is read-only.** There is no code path in this tool that writes to, activates,
 deactivates or deletes anything on your instance. A tool whose job is to tell you the
@@ -198,7 +232,7 @@ becomes `npx silentgreen`.
 
 ```bash
 npm install
-npm test          # 98 tests
+npm test          # 109 tests
 npm run check     # tsc --noEmit
 npx tsx src/cli.ts demo
 ```
@@ -207,8 +241,8 @@ The core is pure and exhaustively tested: `contract/circularity.ts` is the confi
 gate, `graph/hash.ts` decides what counts as a meaningful change, `verify/assert.ts`
 evaluates expectations, `verify/cadence.ts` handles absence.
 
-Two bugs the worked example found in this tool's own code, both of which were the tool's
-own subject matter:
+Bugs found by testing this thing rather than trusting it, all of them the tool's own
+subject matter:
 
 1. Cadence inference counted overnight and weekend gaps as rhythm, producing "runs at
    least every 16 hours" for a workflow that runs hourly. An expectation that loose would
