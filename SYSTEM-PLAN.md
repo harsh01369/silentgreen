@@ -401,10 +401,11 @@ real batches that neither the builder nor a fixture author wrote.
   restated with a different value, a percentage that does not match its amount, a due date
   before the issue date. No source and no model needed. Stands down when the answer itself
   mentions a shipping line or a discount that would bridge the sum.
+- [done] Structural-conformance check: JSON wrapped in prose, truncated JSON, prose where
+  JSON was asked for, a ragged markdown table. Stays quiet on ordinary prose that happens
+  to contain a brace.
 - [in progress] Harden extraction: dates and quotations done; still to do are
   words-to-number, currency-code normalisation, fuzzy name matching.
-- [open] Structural-conformance check: an answer that claims to be JSON or a table parses
-  and carries the required shape.
 - [open] Real reporting from `check`, leading with the coverage-honesty sentence.
 - [open] Importers: JSONL and CSV done; LangSmith and Langfuse next.
 - [open] GitHub Action that runs `check` on a fixture set and comments on the PR.

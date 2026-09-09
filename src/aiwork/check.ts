@@ -24,10 +24,17 @@ import { createHash } from 'node:crypto';
 import { checkGrounding, type GroundingOptions, type UngroundedAtom } from '../verify/grounding';
 import { matchDegenerate, describeDegenerate } from '../verify/assert';
 import { checkConsistency } from '../verify/consistency';
+import { checkConformance } from '../verify/conformance';
 import type { DegeneratePattern } from '../contract/types';
 import { groundingSourcesFor, type TaskRecord } from './record';
 
-export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated' | 'inconsistent';
+export type TaskProblemKind =
+  | 'degenerate'
+  | 'ungrounded'
+  | 'deferred'
+  | 'duplicated'
+  | 'inconsistent'
+  | 'malformed';
 
 export interface TaskProblem {
   readonly kind: TaskProblemKind;
@@ -126,7 +133,14 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
   }
 
   const results: TaskResult[] = [];
-  const byKind: Record<TaskProblemKind, number> = { degenerate: 0, ungrounded: 0, deferred: 0, duplicated: 0, inconsistent: 0 };
+  const byKind: Record<TaskProblemKind, number> = {
+    degenerate: 0,
+    ungrounded: 0,
+    deferred: 0,
+    duplicated: 0,
+    inconsistent: 0,
+    malformed: 0,
+  };
 
   for (const record of records) {
     const problems: TaskProblem[] = [];
@@ -163,6 +177,10 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
 
     for (const bad of checkConsistency(record.output)) {
       problems.push({ kind: 'inconsistent', summary: bad.summary, evidence: bad.evidence });
+    }
+
+    for (const bad of checkConformance(record.output, record.input)) {
+      problems.push({ kind: 'malformed', summary: bad.summary, evidence: bad.evidence });
     }
 
     let inconclusive = false;
@@ -224,7 +242,7 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
       byKind,
       headline,
       caveat:
-        'This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.',
+        'This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.',
     },
   };
 }

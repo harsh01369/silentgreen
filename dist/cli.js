@@ -3160,6 +3160,95 @@ function checkConsistency(output) {
   return out;
 }
 
+// src/verify/conformance.ts
+var JSON_ASKED = /\b(?:return|reply|respond|output|format|give|provide)\b[^.]*\bjson\b|\bas json\b|\bin json\b|\bvalid json\b/i;
+function stripFence(s) {
+  const m = s.match(/^\s*```(?:json|json5)?\s*\n?([\s\S]*?)\n?```\s*$/i);
+  if (m && m[1] !== void 0) return { body: m[1].trim(), hadFence: true };
+  return { body: s, hadFence: false };
+}
+function locateJson(s) {
+  const first = s.search(/[[{]/);
+  if (first === -1) return void 0;
+  const open = s[first];
+  const close = open === "{" ? "}" : "]";
+  let depth = 0;
+  let inStr = false;
+  let esc2 = false;
+  for (let i = first; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc2) esc2 = false;
+      else if (ch === "\\") esc2 = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return { start: first, end: i + 1 };
+    }
+  }
+  return { start: first, end: -1 };
+}
+function checkConformance(output, input = "") {
+  const text = output.trim();
+  if (text.length === 0) return [];
+  const looksJson = /^[[{]/.test(text) || /```json/i.test(output) || JSON_ASKED.test(input);
+  const out = [];
+  if (looksJson) {
+    const { body, hadFence } = stripFence(text);
+    const located = locateJson(body);
+    if (!located) {
+      out.push({
+        kind: "unparseable-json",
+        summary: "The answer was expected to be JSON but contains no JSON value.",
+        evidence: text.slice(0, 160)
+      });
+    } else if (located.end === -1) {
+      out.push({
+        kind: "truncated",
+        summary: "The JSON opens but never closes, so the answer was cut off before it finished.",
+        evidence: `...${body.slice(Math.max(0, body.length - 120))}`
+      });
+    } else {
+      const candidate = body.slice(located.start, located.end);
+      try {
+        JSON.parse(candidate);
+        const before = body.slice(0, located.start).trim();
+        const after = body.slice(located.end).trim();
+        if ((before.length > 0 || after.length > 0) && !hadFence) {
+          out.push({
+            kind: "json-with-surrounding-prose",
+            summary: "The JSON is valid but has prose around it, so a parser expecting only JSON will reject the whole response.",
+            evidence: (before || after).slice(0, 160)
+          });
+        }
+      } catch (err) {
+        out.push({
+          kind: "unparseable-json",
+          summary: `The answer looks like JSON but does not parse: ${String(err.message).slice(0, 100)}.`,
+          evidence: candidate.slice(0, 160)
+        });
+      }
+    }
+  }
+  const tableLines = text.split("\n").filter((l) => /^\s*\|.*\|\s*$/.test(l));
+  if (tableLines.length >= 3) {
+    const cols = tableLines.filter((l) => !/^\s*\|[\s:|-]+\|\s*$/.test(l)).map((l) => l.split("|").slice(1, -1).length);
+    const first = cols[0];
+    if (first !== void 0 && cols.some((n) => n !== first)) {
+      out.push({
+        kind: "ragged-table",
+        summary: `The table rows do not have the same number of columns (${[...new Set(cols)].join(", ")}).`,
+        evidence: tableLines.slice(0, 3).join("  //  ").slice(0, 200)
+      });
+    }
+  }
+  return out;
+}
+
 // src/aiwork/check.ts
 var DEGENERATE_PATTERNS = [
   "empty-string",
@@ -3196,7 +3285,14 @@ function checkBatch(records, opts = {}) {
     counts.set(fp, (counts.get(fp) ?? 0) + 1);
   }
   const results = [];
-  const byKind = { degenerate: 0, ungrounded: 0, deferred: 0, duplicated: 0, inconsistent: 0 };
+  const byKind = {
+    degenerate: 0,
+    ungrounded: 0,
+    deferred: 0,
+    duplicated: 0,
+    inconsistent: 0,
+    malformed: 0
+  };
   for (const record of records) {
     const problems = [];
     for (const pattern of DEGENERATE_PATTERNS) {
@@ -3227,6 +3323,9 @@ function checkBatch(records, opts = {}) {
     }
     for (const bad of checkConsistency(record.output)) {
       problems.push({ kind: "inconsistent", summary: bad.summary, evidence: bad.evidence });
+    }
+    for (const bad of checkConformance(record.output, record.input)) {
+      problems.push({ kind: "malformed", summary: bad.summary, evidence: bad.evidence });
     }
     let inconclusive2 = false;
     let inconclusiveReason;
@@ -3275,7 +3374,7 @@ function checkBatch(records, opts = {}) {
       inconclusive: inconclusiveCount,
       byKind,
       headline,
-      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
     }
   };
 }
@@ -3535,11 +3634,46 @@ var contradiction = [
     label: { id: "sc-07-date-order-ok", verdict: "clean" }
   }
 ];
+var structured = [
+  {
+    id: "so-01-json-in-prose",
+    input: "Return the account status as valid JSON.",
+    source: "items: 3, status ok",
+    output: 'Certainly, here is the JSON you requested:\n{"status":"ok","count":3}',
+    label: { id: "so-01-json-in-prose", verdict: "problem", kinds: ["malformed"], note: "a JSON parser will choke on the preamble" }
+  },
+  {
+    id: "so-02-truncated",
+    input: "List the orders as JSON.",
+    source: "three orders",
+    output: '{"orders":[{"id":1},{"id":2},{"id":',
+    label: { id: "so-02-truncated", verdict: "problem", kinds: ["malformed"], note: "the object never closes" }
+  },
+  {
+    id: "so-03-prose-when-json-asked",
+    input: "Respond only with valid JSON.",
+    source: "account balance is 0",
+    output: "The account balance is zero, nothing is owed.",
+    label: { id: "so-03-prose-when-json-asked", verdict: "problem", kinds: ["malformed"] }
+  },
+  {
+    id: "so-04-clean-fenced",
+    source: "status ok, three items",
+    output: '```json\n{"status":"ok","count":3}\n```',
+    label: { id: "so-04-clean-fenced", verdict: "inconclusive", note: "valid JSON, but a fenced code block has no checkable prose atoms" }
+  },
+  {
+    id: "so-05-clean-bare",
+    source: "the reference is ORD-4471 and the total is 90.00 GBP",
+    output: '{"reference":"ORD-4471","total":"90.00 GBP"}',
+    label: { id: "so-05-clean-bare", verdict: "clean", note: "parses, and both values trace to the source" }
+  }
+];
 function casesToRecords(cases) {
   return {
     records: cases.map((k) => ({
       id: k.id,
-      input: "Answer the customer using the material provided.",
+      input: k.input ?? "Answer the customer using the material provided.",
       sources: k.source ? [k.source] : [],
       output: k.output
     })),
@@ -3552,12 +3686,14 @@ function builtinBatches() {
   const deg = casesToRecords(degenerate);
   const inc = casesToRecords(inconclusive);
   const con = casesToRecords(contradiction);
+  const str2 = casesToRecords(structured);
   return [
     { name: "billing-support", synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: "faithful-adversarial", synthetic: true, records: faith.records, labels: faith.labels },
     { name: "fabrication-adversarial", synthetic: true, records: fab.records, labels: fab.labels },
     { name: "degenerate-and-deferral", synthetic: true, records: deg.records, labels: deg.labels },
     { name: "self-contradiction", synthetic: true, records: con.records, labels: con.labels },
+    { name: "structured-output", synthetic: true, records: str2.records, labels: str2.labels },
     { name: "inconclusive", synthetic: true, records: inc.records, labels: inc.labels }
   ];
 }
@@ -3963,7 +4099,8 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     ["degenerate", "empty, unrendered or refused"],
     ["deferred", "handed the task back instead of doing it"],
     ["duplicated", "the same answer across different tasks"],
-    ["inconsistent", "the answer contradicts itself"]
+    ["inconsistent", "the answer contradicts itself"],
+    ["malformed", "not the structured shape it was meant to be"]
   ];
   console.log("");
   for (const [k, label] of kinds) {

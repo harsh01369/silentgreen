@@ -303,6 +303,7 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     ['deferred', 'handed the task back instead of doing it'],
     ['duplicated', 'the same answer across different tasks'],
     ['inconsistent', 'the answer contradicts itself'],
+    ['malformed', 'not the structured shape it was meant to be'],
   ];
   console.log('');
   for (const [k, label] of kinds) {

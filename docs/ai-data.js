@@ -3,13 +3,14 @@ window.SGAI = {
   "clean": 13,
   "problematic": 7,
   "headline": "7 of 20 answers (35%) contain something the pipeline reported as a success.",
-  "caveat": "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.",
+  "caveat": "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.",
   "byKind": {
     "degenerate": 2,
     "ungrounded": 4,
     "deferred": 1,
     "duplicated": 3,
-    "inconsistent": 0
+    "inconsistent": 0,
+    "malformed": 0
   },
   "fabricated": {
     "id": "task-004",

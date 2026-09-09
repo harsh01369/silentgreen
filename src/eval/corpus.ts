@@ -45,6 +45,8 @@ interface Case {
   readonly source: string;
   readonly output: string;
   readonly label: TaskLabel;
+  /** Overrides the default instruction, for cases that turn on what was asked. */
+  readonly input?: string;
 }
 
 const faithful: readonly Case[] = [
@@ -265,13 +267,51 @@ const contradiction: readonly Case[] = [
   },
 ];
 
+/* ----------------------------------------------------------- structured-output */
+
+const structured: readonly Case[] = [
+  {
+    id: 'so-01-json-in-prose',
+    input: 'Return the account status as valid JSON.',
+    source: 'items: 3, status ok',
+    output: 'Certainly, here is the JSON you requested:\n{"status":"ok","count":3}',
+    label: { id: 'so-01-json-in-prose', verdict: 'problem', kinds: ['malformed'], note: 'a JSON parser will choke on the preamble' },
+  },
+  {
+    id: 'so-02-truncated',
+    input: 'List the orders as JSON.',
+    source: 'three orders',
+    output: '{"orders":[{"id":1},{"id":2},{"id":',
+    label: { id: 'so-02-truncated', verdict: 'problem', kinds: ['malformed'], note: 'the object never closes' },
+  },
+  {
+    id: 'so-03-prose-when-json-asked',
+    input: 'Respond only with valid JSON.',
+    source: 'account balance is 0',
+    output: 'The account balance is zero, nothing is owed.',
+    label: { id: 'so-03-prose-when-json-asked', verdict: 'problem', kinds: ['malformed'] },
+  },
+  {
+    id: 'so-04-clean-fenced',
+    source: 'status ok, three items',
+    output: '```json\n{"status":"ok","count":3}\n```',
+    label: { id: 'so-04-clean-fenced', verdict: 'inconclusive', note: 'valid JSON, but a fenced code block has no checkable prose atoms' },
+  },
+  {
+    id: 'so-05-clean-bare',
+    source: 'the reference is ORD-4471 and the total is 90.00 GBP',
+    output: '{"reference":"ORD-4471","total":"90.00 GBP"}',
+    label: { id: 'so-05-clean-bare', verdict: 'clean', note: 'parses, and both values trace to the source' },
+  },
+];
+
 /* -------------------------------------------------------------------- assembly */
 
 function casesToRecords(cases: readonly Case[]): { records: readonly TaskRecord[]; labels: readonly TaskLabel[] } {
   return {
     records: cases.map((k) => ({
       id: k.id,
-      input: 'Answer the customer using the material provided.',
+      input: k.input ?? 'Answer the customer using the material provided.',
       sources: k.source ? [k.source] : [],
       output: k.output,
     })),
@@ -285,6 +325,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
   const deg = casesToRecords(degenerate);
   const inc = casesToRecords(inconclusive);
   const con = casesToRecords(contradiction);
+  const str = casesToRecords(structured);
 
   return [
     { name: 'billing-support', synthetic: true, records: demoTasks(), labels: billingLabels },
@@ -292,6 +333,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
     { name: 'fabrication-adversarial', synthetic: true, records: fab.records, labels: fab.labels },
     { name: 'degenerate-and-deferral', synthetic: true, records: deg.records, labels: deg.labels },
     { name: 'self-contradiction', synthetic: true, records: con.records, labels: con.labels },
+    { name: 'structured-output', synthetic: true, records: str.records, labels: str.labels },
     { name: 'inconclusive', synthetic: true, records: inc.records, labels: inc.labels },
   ];
 }
