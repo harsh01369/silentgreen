@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { writeFileSync } from "node:fs";
+import { writeFileSync as writeFileSync2 } from "node:fs";
 
 // src/verify/assert.ts
 var EVIDENCE_MAX = 300;
@@ -1211,9 +1211,11 @@ import { appendFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 var GENESIS_PREV = "0".repeat(64);
 function canonical(v) {
+  if (v === void 0) return "null";
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
-  const entries = Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`);
+  const obj = v;
+  const entries = Object.keys(obj).filter((k) => obj[k] !== void 0).sort().map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`);
   return `{${entries.join(",")}}`;
 }
 function hashEntry(e) {
@@ -1688,19 +1690,841 @@ function renderReport(input) {
 </html>`;
 }
 
+// src/store/store.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+var STORE_DIR = ".silentgreen";
+var STATE_FILE = "state.json";
+var LEDGER_FILE = "ledger.jsonl";
+var STATE_VERSION = 1;
+var SAMPLES_PER_SINK = 4;
+function emptyState() {
+  return { version: STATE_VERSION, workflows: {}, assertions: [], clients: {} };
+}
+var Store = class {
+  constructor(dir = STORE_DIR) {
+    this.dir = dir;
+    mkdirSync2(dir, { recursive: true });
+    const path = join(dir, STATE_FILE);
+    if (existsSync2(path)) {
+      try {
+        this.state = JSON.parse(readFileSync2(path, "utf8"));
+      } catch (err) {
+        throw new Error(
+          `${path} could not be parsed, so the confirmed expectations cannot be read. Move it aside and rescan rather than continuing, because a store that half-loads is worse than none. (${String(err)})`
+        );
+      }
+      if (this.state.version !== STATE_VERSION) {
+        throw new Error(`${path} was written by a different version of this tool (found ${this.state.version}, expected ${STATE_VERSION}).`);
+      }
+    } else {
+      this.state = emptyState();
+    }
+    this.ledger = new Ledger(join(dir, LEDGER_FILE));
+  }
+  state;
+  ledger;
+  save() {
+    const finalPath = join(this.dir, STATE_FILE);
+    const tmp = `${finalPath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(this.state, null, 2), "utf8");
+    renameSync(tmp, finalPath);
+  }
+  workflows() {
+    return Object.values(this.state.workflows);
+  }
+  workflow(id) {
+    return this.state.workflows[id];
+  }
+  assertions(workflowId) {
+    return workflowId ? this.state.assertions.filter((a) => a.workflowId === workflowId) : this.state.assertions;
+  }
+  assertion(id) {
+    return this.state.assertions.find((a) => a.id === id);
+  }
+  clients() {
+    return this.state.clients;
+  }
+  setClient(workflowId, clientId, clientName) {
+    const wf = this.state.workflows[workflowId];
+    if (!wf) return;
+    wf.clientId = clientId;
+    if (!this.state.clients[clientId]) this.state.clients[clientId] = { name: clientName ?? clientId };
+    else if (clientName) this.state.clients[clientId].name = clientName;
+  }
+  /**
+   * Record a workflow as it is right now.
+   *
+   * If the graph has changed since the last scan, every confirmed expectation
+   * bound to the old revision becomes stale, the change is written to the ledger
+   * with a human-readable description, and those checks start reporting
+   * `unproven` rather than continuing to describe a graph that no longer exists.
+   */
+  observeWorkflow(args) {
+    const existing = this.state.workflows[args.id];
+    let changes = [];
+    let staled = 0;
+    if (existing && existing.hash !== args.hash) {
+      changes = diffWorkflows(existing.doc, args.doc);
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      for (const a of this.state.assertions) {
+        if (a.workflowId !== args.id) continue;
+        if (a.status !== "confirmed") continue;
+        const idx = this.state.assertions.indexOf(a);
+        this.state.assertions[idx] = {
+          ...a,
+          status: "stale",
+          stale: { since: now, fromHash: existing.hash, toHash: args.hash }
+        };
+        staled += 1;
+      }
+      this.ledger.append(
+        "contract-stale",
+        args.id,
+        {
+          fromHash: existing.hash,
+          toHash: args.hash,
+          staledAssertions: staled,
+          changes: changes.map((c2) => c2.description)
+        },
+        { clientId: existing.clientId }
+      );
+    }
+    const samples = {};
+    const sampleRunIds = [];
+    for (const run of args.runs.slice(0, 12)) {
+      let used = false;
+      for (const [sinkId, items] of Object.entries(run.sinkOutputs)) {
+        const bucket = samples[sinkId] ?? (samples[sinkId] = []);
+        if (bucket.length >= SAMPLES_PER_SINK) continue;
+        if (items.length === 0) continue;
+        bucket.push(items[0]);
+        used = true;
+      }
+      if (used) sampleRunIds.push(run.id);
+    }
+    const times = args.runs.map((r) => Date.parse(r.startedAt)).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+    const observedWindow = times.length > 0 ? { start: new Date(times[0]).toISOString(), end: new Date(times[times.length - 1]).toISOString() } : existing?.observedWindow;
+    this.state.workflows[args.id] = {
+      id: args.id,
+      platform: args.platform,
+      name: args.name,
+      active: args.active,
+      hash: args.hash,
+      doc: args.doc,
+      previousDoc: existing && existing.hash !== args.hash ? existing.doc : existing?.previousDoc,
+      previousHash: existing && existing.hash !== args.hash ? existing.hash : existing?.previousHash,
+      clientId: existing?.clientId,
+      lastScannedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      cadenceShape: args.cadenceShape ?? existing?.cadenceShape,
+      samples,
+      sampleRunIds,
+      observedWindow
+    };
+    if (!existing) {
+      this.ledger.append("workflow-observed", args.id, { name: args.name, hash: args.hash, active: args.active });
+    }
+    return { changes, staled };
+  }
+  /**
+   * Add proposals, skipping any that duplicate an expectation already on file.
+   *
+   * A scan that re-proposes the same forty checks every night would train people
+   * to clear the queue without reading it, which defeats the only mechanism that
+   * makes any of this mean anything.
+   */
+  addProposals(proposals) {
+    let added = 0;
+    let skipped = 0;
+    for (const p of proposals) {
+      const dup = this.state.assertions.some(
+        (a) => a.workflowId === p.assertion.workflowId && a.sinkId === p.assertion.sinkId && a.kind === p.assertion.kind && a.basis === p.assertion.basis && a.status !== "retired"
+      );
+      if (dup) {
+        skipped += 1;
+        continue;
+      }
+      this.state.assertions.push({ ...p.assertion, rationale: p.rationale, confidence: p.confidence });
+      added += 1;
+    }
+    if (added > 0) {
+      const wfId = proposals[0]?.assertion.workflowId ?? "";
+      this.ledger.append("proposal-made", wfId, { added, skipped }, { clientId: this.state.workflows[wfId]?.clientId });
+    }
+    return { added, skipped };
+  }
+  /** Put a proposal through the gate. Refusals are recorded too. */
+  confirm(assertionId, confirmation) {
+    const idx = this.state.assertions.findIndex((a2) => a2.id === assertionId);
+    if (idx < 0) return { ok: false, refusal: { reason: "retired", message: "That expectation is not in the store." } };
+    const a = this.state.assertions[idx];
+    const wf = this.state.workflows[a.workflowId];
+    const result = confirmAssertion(a, confirmation, { currentWorkflowHash: wf?.hash ?? "" });
+    if ("refused" in result) {
+      this.ledger.append(
+        "assertion-refused",
+        a.workflowId,
+        { assertionId, statement: a.statement, reason: result.refused.reason, by: confirmation.by },
+        { clientId: wf?.clientId }
+      );
+      return { ok: false, refusal: result.refused };
+    }
+    this.state.assertions[idx] = result.assertion;
+    this.ledger.append(
+      "assertion-confirmed",
+      a.workflowId,
+      {
+        assertionId,
+        statement: a.statement,
+        basis: a.basis,
+        by: confirmation.by,
+        workflowHash: confirmation.workflowHash,
+        evidenceRunIds: confirmation.evidenceRunIds,
+        // The attestation is recorded verbatim, because it is printed beside
+        // every green tick it goes on to produce.
+        baselineAttestation: confirmation.baselineAttestation
+      },
+      { clientId: wf?.clientId }
+    );
+    return { ok: true };
+  }
+  retire(assertionId, by, why) {
+    const idx = this.state.assertions.findIndex((a2) => a2.id === assertionId);
+    if (idx < 0) return false;
+    const a = this.state.assertions[idx];
+    this.state.assertions[idx] = { ...a, status: "retired" };
+    this.ledger.append(
+      "assertion-retired",
+      a.workflowId,
+      { assertionId, statement: a.statement, by, why },
+      { clientId: this.state.workflows[a.workflowId]?.clientId }
+    );
+    return true;
+  }
+  counts(workflowId) {
+    const list = this.assertions(workflowId);
+    return {
+      proposed: list.filter((a) => a.status === "proposed").length,
+      confirmed: list.filter((a) => a.status === "confirmed").length,
+      stale: list.filter((a) => a.status === "stale").length,
+      retired: list.filter((a) => a.status === "retired").length
+    };
+  }
+};
+
+// src/serve/server.ts
+import { createServer } from "node:http";
+
+// src/serve/app.ts
+var APP_HTML = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>silentgreen review</title>
+<style>
+  :root {
+    --ground: #eef1f4; --panel: #fff; --ink: #10151a; --soft: #4e5761; --faint: #79838d;
+    --rule: #d5dbe1; --rule-soft: #e8ecf0;
+    --intent: #1c4ea8; --intent-bg: #eef3fb;
+    --structure: #475059; --structure-bg: #eef0f2;
+    --observation: #7d5200; --observation-bg: #fcf7ea;
+    --ok: #157f47; --ok-bg: #eef7f2;
+    --bad: #a4231b; --bad-bg: #fcf1f0;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 400 15px/1.55 var(--sans); font-variant-numeric: tabular-nums; }
+  button { font: inherit; }
+
+  header {
+    background: var(--ink); color: #e8ecf0; padding: 10px 18px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  }
+  header .mark { font-weight: 700; letter-spacing: -0.02em; }
+  header .mark i { font-style: normal; color: #4fbe84; }
+  header .meta { color: #98a4ae; font-size: 13px; }
+  header .who { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #98a4ae; }
+  header .who input {
+    font: 400 13px var(--sans); padding: 5px 9px; border: 1px solid #39424c;
+    background: #1b2229; color: #e8ecf0; min-width: 210px;
+  }
+  header .who input::placeholder { color: #6d7882; }
+
+  .layout { display: grid; grid-template-columns: 288px 1fr; min-height: calc(100vh - 42px); }
+  aside { background: var(--panel); border-right: 1px solid var(--rule); }
+  aside h2 { font-size: 12.5px; font-weight: 600; color: var(--faint); margin: 0; padding: 14px 16px 8px; }
+  .wf { display: block; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--rule-soft); padding: 12px 16px; cursor: pointer; }
+  .wf:hover { background: var(--ground); }
+  .wf[aria-current="true"] { background: var(--ink); color: #fff; }
+  .wf .n { font-weight: 600; font-size: 14.5px; }
+  .wf .c { font-size: 12.5px; color: var(--faint); margin-top: 3px; }
+  .wf[aria-current="true"] .c { color: #9fb0bd; }
+  .pill { display: inline-block; padding: 1px 6px; font-size: 11.5px; border: 1px solid currentColor; margin-right: 5px; }
+
+  main { padding: 22px 26px 60px; max-width: 900px; }
+  h1 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 3px; }
+  .sub { color: var(--soft); font-size: 14px; margin: 0 0 18px; }
+
+  .tabs { display: flex; border-bottom: 1px solid var(--rule); margin-bottom: 20px; }
+  .tabs button { background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 9px 14px; cursor: pointer; color: var(--soft); font-weight: 500; font-size: 14px; }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+
+  .honesty { background: var(--panel); border: 1px solid var(--rule); border-left: 3px solid var(--observation); padding: 13px 16px; margin-bottom: 18px; font-size: 14.5px; }
+
+  .card { background: var(--panel); border: 1px solid var(--rule); margin-bottom: 14px; }
+  .card-head { padding: 16px 18px 0; }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 2px 7px; letter-spacing: .02em; margin-bottom: 8px; }
+  .chip.intent { background: var(--intent-bg); color: var(--intent); }
+  .chip.structure { background: var(--structure-bg); color: var(--structure); }
+  .chip.observation { background: var(--observation-bg); color: var(--observation); }
+  .chip.conf { background: var(--ok-bg); color: var(--ok); }
+  .chip.stale { background: var(--observation-bg); color: var(--observation); }
+  .card h3 { margin: 0 0 6px; font-size: 16.5px; font-weight: 600; line-height: 1.35; }
+  .card .why { color: var(--soft); font-size: 14.5px; margin: 0 0 12px; }
+  .card .sink { color: var(--faint); font-size: 13px; margin: 0 0 10px; }
+
+  .proves { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule-soft); border-top: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
+  .proves div { background: var(--panel); padding: 11px 18px; font-size: 13.5px; }
+  .proves .k { display: block; font-weight: 600; color: var(--faint); font-size: 12px; margin-bottom: 2px; }
+  .proves .yes { border-left: 3px solid var(--ok); }
+  .proves .no { border-left: 3px solid var(--observation); }
+
+  .evidence { padding: 14px 18px; }
+  .evidence .k { font-size: 12.5px; color: var(--faint); margin-bottom: 6px; }
+  .evidence pre { margin: 0; padding: 10px 12px; background: var(--ground); border: 1px solid var(--rule-soft); font: 400 12.5px/1.6 var(--mono); overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 190px; }
+
+  .attest { padding: 0 18px 4px; }
+  .attest .box { background: var(--observation-bg); border: 1px solid var(--rule); border-left: 3px solid var(--observation); padding: 14px 16px; }
+  .attest label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+  .attest .dates { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .attest input[type=date], .attest textarea, .attest input[type=text] {
+    font: 400 14px var(--sans); padding: 7px 9px; border: 1px solid var(--rule); background: var(--panel); color: var(--ink); width: 100%;
+  }
+  .attest .dates > div { flex: 1 1 150px; }
+  .attest textarea { min-height: 62px; resize: vertical; }
+  .attest .verdict { font-size: 13px; margin-top: 7px; min-height: 18px; }
+  .attest .verdict.no { color: var(--bad); }
+  .attest .verdict.yes { color: var(--ok); }
+
+  .actions { padding: 14px 18px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--ink); background: var(--ink); color: #fff; padding: 8px 15px; cursor: pointer; font-weight: 500; font-size: 14px; }
+  .btn.ghost { background: transparent; color: var(--soft); border-color: var(--rule); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn:focus-visible, .wf:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--intent); outline-offset: 2px; }
+
+  .refusal { margin: 0 18px 16px; background: var(--bad-bg); border: 1px solid var(--rule); border-left: 3px solid var(--bad); padding: 12px 15px; font-size: 14px; }
+  .refusal[hidden] { display: none; }
+
+  .empty { background: var(--panel); border: 1px solid var(--rule); padding: 30px 24px; color: var(--soft); }
+  .empty b { color: var(--ink); }
+
+  table.led { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--rule); font-size: 13.5px; }
+  table.led th, table.led td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  table.led th { font-weight: 600; color: var(--faint); font-size: 12.5px; }
+  table.led td.k { font-family: var(--mono); font-size: 12px; color: var(--soft); white-space: nowrap; }
+  .chainok { font-size: 13.5px; margin-bottom: 12px; }
+  .chainok.ok { color: var(--ok); }
+  .chainok.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="mark">silent<i>green</i></div>
+  <div class="meta" id="hmeta">reading store</div>
+  <div class="who">
+    <label for="who">confirming as</label>
+    <input id="who" type="text" placeholder="your name or email" autocomplete="email">
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <h2>Workflows</h2>
+    <div id="wflist"></div>
+  </aside>
+  <main>
+    <h1 id="title">&nbsp;</h1>
+    <p class="sub" id="subtitle">&nbsp;</p>
+    <div class="honesty" id="honesty"></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="queue" aria-selected="true">Review queue</button>
+      <button role="tab" data-tab="live" aria-selected="false">Live checks</button>
+      <button role="tab" data-tab="stale" aria-selected="false">Stale</button>
+      <button role="tab" data-tab="history" aria-selected="false">History</button>
+    </div>
+    <div id="body"></div>
+  </main>
+</div>
+
+<script>
+(function () {
+  var S = null, current = null, tab = 'queue';
+  var whoEl = document.getElementById('who');
+  whoEl.value = localStorage.getItem('sg.who') || '';
+  whoEl.addEventListener('input', function () { localStorage.setItem('sg.who', whoEl.value); render(); });
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function api(path, body) {
+    return fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined)
+      .then(function (r) { return r.json(); });
+  }
+  function load() {
+    return api('/api/state').then(function (s) {
+      S = s;
+      if (!current || !S.workflows.some(function (w) { return w.id === current; })) {
+        current = S.workflows.length ? S.workflows[0].id : null;
+      }
+      render();
+    });
+  }
+
+  function wf() { return S.workflows.filter(function (w) { return w.id === current; })[0]; }
+  function forWf(status) {
+    return S.assertions.filter(function (a) { return a.workflowId === current && (status ? a.status === status : true); });
+  }
+
+  function renderSidebar() {
+    var el = document.getElementById('wflist');
+    if (!S.workflows.length) { el.innerHTML = '<div style="padding:16px;color:var(--faint);font-size:13.5px">Nothing scanned yet.</div>'; return; }
+    el.innerHTML = S.workflows.map(function (w) {
+      var c = w.counts;
+      return '<button class="wf" data-id="' + esc(w.id) + '" aria-current="' + (w.id === current) + '">' +
+        '<div class="n">' + esc(w.name) + '</div>' +
+        '<div class="c">' + c.proposed + ' to review · ' + c.confirmed + ' live' + (c.stale ? ' · ' + c.stale + ' stale' : '') + '</div>' +
+        '</button>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('.wf'), function (b) {
+      b.addEventListener('click', function () { current = b.dataset.id; render(); });
+    });
+  }
+
+  function proposalCard(a, w) {
+    var sink = (w.sinkNames && w.sinkNames[a.sinkId]) || a.sinkId;
+    var samples = (w.samples && w.samples[a.sinkId]) || [];
+    var evid = samples.length
+      ? '<div class="evidence"><div class="k">Real values this will be judging, captured from ' + esc(w.sampleRunIds.length) + ' recent run(s)</div><pre>' +
+        esc(samples.map(function (s) { return JSON.stringify(s, null, 2); }).join('\n\n')) + '</pre></div>'
+      : '<div class="evidence"><div class="k">No captured output was retained for this step, so there is nothing to show you. Confirming without seeing what it judges is exactly the habit this screen exists to interrupt.</div></div>';
+
+    // Prefill the window this was actually learned from. The reviewer is being
+    // asked whether that period was good, so making them look it up first is
+    // friction that teaches people to click past the only question that matters.
+    var win = w.observedWindow || {};
+    var ds = (win.start || '').slice(0, 10);
+    var de = (win.end || '').slice(0, 10);
+
+    var attest = a.needsAttestation
+      ? '<div class="attest"><div class="box">' +
+          '<label>This expectation was learned from what the workflow has been doing between ' +
+            esc(ds || 'an unknown date') + ' and ' + esc(de || 'an unknown date') +
+            '. On its own that proves only that it has not changed. Do you believe that period was actually correct?</label>' +
+          '<div class="dates">' +
+            '<div><label for="ws-' + a.id + '">from</label><input type="date" id="ws-' + a.id + '" value="' + esc(ds) + '"></div>' +
+            '<div><label for="we-' + a.id + '">to</label><input type="date" id="we-' + a.id + '" value="' + esc(de) + '"></div>' +
+          '</div>' +
+          '<label for="hk-' + a.id + '">and how do you know it was correct?</label>' +
+          '<textarea id="hk-' + a.id + '" placeholder="Reconciled against the client invoice export for August"></textarea>' +
+          '<div class="verdict" id="v-' + a.id + '"></div>' +
+        '</div></div>'
+      : '';
+
+    return '<div class="card" data-a="' + a.id + '">' +
+      '<div class="card-head">' +
+        '<span class="chip ' + a.basis + '">' + a.basis + '</span>' +
+        '<h3>' + esc(a.statement) + '</h3>' +
+        '<p class="sink">at ' + esc(sink) + ' · ' + esc(a.kind) + ' · confidence ' + esc(a.confidence) + '</p>' +
+        '<p class="why">' + esc(a.rationale) + '</p>' +
+      '</div>' +
+      '<div class="proves">' +
+        '<div class="yes"><span class="k">A green result here proves</span>' + esc(a.proves) + '</div>' +
+        '<div class="no"><span class="k">It does not prove</span>' + esc(a.doesNotProve) + '</div>' +
+      '</div>' +
+      evid + attest +
+      '<div class="refusal" id="r-' + a.id + '" hidden></div>' +
+      '<div class="actions">' +
+        '<button class="btn" data-confirm="' + a.id + '">Confirm this expectation</button>' +
+        '<button class="btn ghost" data-retire="' + a.id + '">Not this one</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function renderQueue() {
+    var w = wf(), list = forWf('proposed');
+    if (!list.length) {
+      return '<div class="empty"><b>Nothing waiting.</b><br>Run <code>silentgreen scan</code> to look for new expectations, or check the live tab for what is already running.</div>';
+    }
+    return list.map(function (a) { return proposalCard(a, w); }).join('');
+  }
+
+  function renderLive() {
+    var list = forWf('confirmed'), w = wf();
+    if (!list.length) return '<div class="empty"><b>No live checks.</b><br>Until something here is confirmed, every verdict on this workflow reads as unproven, which is the honest answer rather than a failure.</div>';
+    return list.map(function (a) {
+      var sink = (w.sinkNames && w.sinkNames[a.sinkId]) || a.sinkId;
+      return '<div class="card"><div class="card-head">' +
+        '<span class="chip conf">live</span> <span class="chip ' + a.basis + '">' + a.basis + '</span>' +
+        '<h3>' + esc(a.statement) + '</h3>' +
+        '<p class="sink">at ' + esc(sink) + ' · confirmed by ' + esc(a.confirmation ? a.confirmation.by : '?') +
+          ' on ' + esc(a.confirmation ? a.confirmation.at.slice(0, 10) : '') + '</p>' +
+        (a.confirmation && a.confirmation.attestation
+          ? '<p class="why"><strong>Baseline attested:</strong> ' + esc(a.confirmation.attestation) + '</p>'
+          : '') +
+        '</div><div class="actions"><button class="btn ghost" data-retire="' + a.id + '">Retire this check</button></div></div>';
+    }).join('');
+  }
+
+  function renderStale() {
+    var list = forWf('stale');
+    if (!list.length) return '<div class="empty"><b>Nothing stale.</b><br>Every confirmed check still matches the workflow revision it was confirmed against.</div>';
+    return '<div class="honesty">These were confirmed against an earlier revision of this workflow, so they no longer describe what runs. They report as unproven rather than continuing to report green. Re-read each one against the current graph and confirm it again.</div>' +
+      list.map(function (a) {
+        return '<div class="card"><div class="card-head">' +
+          '<span class="chip stale">stale</span> <span class="chip ' + a.basis + '">' + a.basis + '</span>' +
+          '<h3>' + esc(a.statement) + '</h3>' +
+          '<p class="sink">went stale ' + esc(a.stale ? a.stale.since.slice(0, 10) : '') +
+          ', when the workflow moved from ' + esc(a.stale ? a.stale.fromHash.slice(0, 10) : '') + ' to ' + esc(a.stale ? a.stale.toHash.slice(0, 10) : '') + '</p>' +
+          '</div><div class="actions"><button class="btn" data-reconfirm="' + a.id + '">Re-read and confirm</button>' +
+          '<button class="btn ghost" data-retire="' + a.id + '">Retire it</button></div></div>';
+      }).join('');
+  }
+
+  function renderHistory() {
+    return '<div id="ledger"><div class="empty">Loading the evidence log.</div></div>';
+  }
+
+  function loadHistory() {
+    api('/api/ledger?workflow=' + encodeURIComponent(current)).then(function (d) {
+      var el = document.getElementById('ledger');
+      if (!el) return;
+      var ok = d.verify && d.verify.ok;
+      var head = '<div class="chainok ' + (ok ? 'ok' : 'bad') + '">' +
+        (ok ? 'Chain verified: ' + d.entries.length + ' entries, each committing to the one before it.'
+            : 'Chain does not verify: ' + esc(d.verify.reason)) + '</div>';
+      if (!d.entries.length) { el.innerHTML = head + '<div class="empty">Nothing recorded for this workflow yet.</div>'; return; }
+      el.innerHTML = head + '<table class="led"><thead><tr><th>when</th><th>what</th><th>detail</th></tr></thead><tbody>' +
+        d.entries.slice().reverse().map(function (e) {
+          var detail = e.payload.statement || e.payload.changes || e.payload.reason || e.payload.detail || JSON.stringify(e.payload);
+          if (Array.isArray(detail)) detail = detail.join(' ');
+          return '<tr><td class="k">' + esc(e.at.slice(0, 16).replace('T', ' ')) + '</td><td>' + esc(e.kind) + '</td><td>' + esc(String(detail).slice(0, 240)) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    });
+  }
+
+  function render() {
+    if (!S) return;
+    document.getElementById('hmeta').textContent =
+      S.ledgerLength + ' ledger entries · chain ' + (S.ledgerOk ? 'intact' : 'BROKEN');
+    renderSidebar();
+    var w = wf();
+    if (!w) {
+      document.getElementById('title').textContent = 'Nothing scanned yet';
+      document.getElementById('subtitle').textContent = 'Run silentgreen scan against an n8n instance to populate this.';
+      document.getElementById('honesty').textContent = '';
+      document.getElementById('body').innerHTML = '';
+      return;
+    }
+    document.getElementById('title').textContent = w.name;
+    document.getElementById('subtitle').textContent =
+      'revision ' + w.shortHash + ' · ' + (w.active ? 'active' : 'inactive') + ' · last scanned ' + w.lastScannedAt.slice(0, 16).replace('T', ' ');
+    document.getElementById('honesty').textContent = w.honesty.sentence;
+
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
+      b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+    });
+
+    var body = document.getElementById('body');
+    body.innerHTML = tab === 'queue' ? renderQueue()
+      : tab === 'live' ? renderLive()
+      : tab === 'stale' ? renderStale()
+      : renderHistory();
+
+    if (tab === 'history') loadHistory();
+    wire();
+  }
+
+  function wire() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-confirm], [data-reconfirm]'), function (b) {
+      b.addEventListener('click', function () { doConfirm(b.dataset.confirm || b.dataset.reconfirm); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-retire]'), function (b) {
+      b.addEventListener('click', function () {
+        var why = prompt('Why is this one not worth checking? Recorded in the evidence log.');
+        if (why === null) return;
+        api('/api/retire', { assertionId: b.dataset.retire, by: whoEl.value, why: why }).then(load);
+      });
+    });
+    // Live feedback on the attestation, decided by the same function the gate uses.
+    Array.prototype.forEach.call(document.querySelectorAll('textarea[id^="hk-"]'), function (t) {
+      var id = t.id.slice(3);
+      var timer = null;
+      t.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          api('/api/attestation-check', { howKnown: t.value }).then(function (r) {
+            var v = document.getElementById('v-' + id);
+            if (!v) return;
+            if (!t.value.trim()) { v.textContent = ''; v.className = 'verdict'; return; }
+            v.className = 'verdict ' + (r.substantive ? 'yes' : 'no');
+            v.textContent = r.substantive
+              ? 'That will be accepted, and printed in the report beside every result this check produces.'
+              : r.hint;
+          });
+        }, 260);
+      });
+    });
+  }
+
+  function doConfirm(id) {
+    var by = whoEl.value.trim();
+    var box = document.getElementById('r-' + id);
+    if (!by) {
+      if (box) { box.hidden = false; box.textContent = 'Put your name in the box at the top right first. A confirmation records who took responsibility for it, and that name appears in the client report beside the result it produces.'; }
+      whoEl.focus();
+      return;
+    }
+    var a = S.assertions.filter(function (x) { return x.id === id; })[0];
+    var payload = { assertionId: id, by: by };
+    if (a && a.needsAttestation) {
+      payload.attestation = {
+        windowStart: (document.getElementById('ws-' + id) || {}).value || '',
+        windowEnd: (document.getElementById('we-' + id) || {}).value || '',
+        howKnown: (document.getElementById('hk-' + id) || {}).value || ''
+      };
+      // A window whose start and end fall on the same day is still a real
+      // window, so treat it as that whole day rather than rejecting it on a
+      // technicality the reviewer cannot see.
+      if (payload.attestation.windowStart) payload.attestation.windowStart += 'T00:00:00.000Z';
+      if (payload.attestation.windowEnd) payload.attestation.windowEnd += 'T23:59:59.000Z';
+    }
+    api('/api/confirm', payload).then(function (r) {
+      if (r.ok) { load(); return; }
+      if (box) { box.hidden = false; box.textContent = (r.refusal && r.refusal.message) || r.error || 'Refused.'; }
+      // The server's answer is the authoritative one. Clear the advisory hint so
+      // the reviewer is not reading two near-identical red paragraphs.
+      var v = document.getElementById('v-' + id);
+      if (v) { v.textContent = ''; v.className = 'verdict'; }
+    });
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
+    b.addEventListener('click', function () { tab = b.dataset.tab; render(); });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>`;
+
+// src/serve/server.ts
+function json(res, status, payload) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body),
+    "cache-control": "no-store"
+  });
+  res.end(body);
+}
+async function readBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > 1e6) throw new Error("Request body too large.");
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new Error("Request body was not valid JSON.");
+  }
+}
+function str(v) {
+  return typeof v === "string" ? v : "";
+}
+function stateFor(store) {
+  const workflows = store.workflows().map((wf) => {
+    const list = store.assertions(wf.id);
+    const honesty = coverageHonesty(list);
+    return {
+      id: wf.id,
+      name: wf.name,
+      platform: wf.platform,
+      active: wf.active,
+      hash: wf.hash,
+      shortHash: wf.hash.slice(0, 10),
+      clientId: wf.clientId,
+      lastScannedAt: wf.lastScannedAt,
+      counts: store.counts(wf.id),
+      honesty,
+      sampleRunIds: wf.sampleRunIds,
+      observedWindow: wf.observedWindow,
+      sinkNames: sinkNames(wf.doc),
+      // Only the samples a reviewer might need, trimmed for transport.
+      samples: Object.fromEntries(
+        Object.entries(wf.samples).map(([k, v]) => [k, v.slice(0, 3)])
+      ),
+      staleChanges: wf.previousDoc && wf.previousHash !== wf.hash ? { fromHash: wf.previousHash?.slice(0, 10) ?? "" } : void 0
+    };
+  });
+  const assertions = store.assertions().map((a) => {
+    const extended = a;
+    const req = confirmationRequirements(a.basis);
+    return {
+      id: a.id,
+      workflowId: a.workflowId,
+      sinkId: a.sinkId,
+      kind: a.kind,
+      basis: a.basis,
+      statement: a.statement,
+      params: a.params,
+      status: a.status,
+      rationale: extended.rationale ?? "",
+      confidence: extended.confidence ?? "moderate",
+      needsAttestation: req.needsBaselineAttestation,
+      proves: req.proves,
+      doesNotProve: req.doesNotProve,
+      confirmation: a.confirmation ? {
+        by: a.confirmation.by,
+        at: a.confirmation.at,
+        attestation: a.confirmation.baselineAttestation?.howKnown
+      } : void 0,
+      stale: a.stale,
+      createdAt: a.createdAt
+    };
+  });
+  return {
+    workflows,
+    assertions,
+    clients: store.clients(),
+    ledgerLength: store.ledger.length,
+    ledgerOk: store.ledger.verify().ok
+  };
+}
+function sinkNames(doc) {
+  const out = {};
+  for (const n of doc.nodes ?? []) out[n.id && n.id.trim() ? n.id : `name:${n.name}`] = n.name;
+  out["*"] = "the workflow as a whole";
+  return out;
+}
+function serve(opts = {}) {
+  const port = opts.port ?? 4666;
+  const host = opts.host ?? "127.0.0.1";
+  const server = createServer((req, res) => {
+    void handle(req, res, opts.storeDir).catch((err) => {
+      json(res, 400, { error: err instanceof Error ? err.message : String(err) });
+    });
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, host, () => {
+      resolve({ url: `http://${host}:${port}/`, close: () => server.close() });
+    });
+  });
+}
+async function handle(req, res, storeDir) {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const path = url.pathname;
+  if (req.method === "GET" && (path === "/" || path === "/index.html")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(APP_HTML);
+    return;
+  }
+  const store = new Store(storeDir);
+  if (req.method === "GET" && path === "/api/state") {
+    json(res, 200, stateFor(store));
+    return;
+  }
+  if (req.method === "POST" && path === "/api/attestation-check") {
+    const body = await readBody(req);
+    const text = str(body.howKnown);
+    json(res, 200, {
+      substantive: isSubstantiveAttestation(text),
+      hint: 'Name what you checked it against. "Reconciled against the client invoice export for August" is an attestation. "Looks fine" is not, and this sentence is printed in the report beside every result it produces.'
+    });
+    return;
+  }
+  if (req.method === "POST" && path === "/api/confirm") {
+    const body = await readBody(req);
+    const assertionId = str(body.assertionId);
+    const by = str(body.by);
+    const a = store.assertion(assertionId);
+    if (!a) {
+      json(res, 404, { error: "No such expectation." });
+      return;
+    }
+    const wf = store.workflow(a.workflowId);
+    if (!wf) {
+      json(res, 404, { error: "That expectation belongs to a workflow that is no longer in the store." });
+      return;
+    }
+    const att = body.attestation;
+    const result = store.confirm(assertionId, {
+      by,
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      workflowHash: wf.hash,
+      evidenceRunIds: wf.sampleRunIds,
+      ...att && att.howKnown ? {
+        baselineAttestation: {
+          windowStart: str(att.windowStart),
+          windowEnd: str(att.windowEnd),
+          howKnown: str(att.howKnown)
+        }
+      } : {}
+    });
+    if (!result.ok) {
+      store.save();
+      json(res, 200, { ok: false, refusal: result.refusal });
+      return;
+    }
+    store.save();
+    json(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && path === "/api/retire") {
+    const body = await readBody(req);
+    const ok = store.retire(str(body.assertionId), str(body.by), str(body.why));
+    store.save();
+    json(res, ok ? 200 : 404, { ok });
+    return;
+  }
+  if (req.method === "POST" && path === "/api/client") {
+    const body = await readBody(req);
+    store.setClient(str(body.workflowId), str(body.clientId), str(body.clientName));
+    store.save();
+    json(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "GET" && path === "/api/ledger") {
+    const wfId = url.searchParams.get("workflow");
+    const entries = wfId ? store.ledger.forWorkflow(wfId) : store.ledger.all();
+    json(res, 200, { entries: entries.slice(-200), verify: store.ledger.verify() });
+    return;
+  }
+  json(res, 404, { error: "Not found." });
+}
+
 // src/cli.ts
 try {
   process.loadEnvFile(".env");
 } catch {
 }
+var ESC = String.fromCharCode(27);
 var C = {
-  reset: "\x1B[0m",
-  dim: "\x1B[2m",
-  bold: "\x1B[1m",
-  red: "\x1B[31m",
-  green: "\x1B[32m",
-  yellow: "\x1B[33m",
-  blue: "\x1B[36m"
+  reset: ESC + "[0m",
+  dim: ESC + "[2m",
+  bold: ESC + "[1m",
+  red: ESC + "[31m",
+  green: ESC + "[32m",
+  yellow: ESC + "[33m",
+  blue: ESC + "[36m"
 };
 var useColour = process.stdout.isTTY && !process.env.NO_COLOR;
 function c(code, s) {
@@ -1715,6 +2539,10 @@ function rule(label = "") {
   console.log(`
 ${c(C.bold, label)}
 ${c(C.dim, "-".repeat(width))}`);
+}
+function arg(rest, flag) {
+  const i = rest.indexOf(flag);
+  return i >= 0 ? rest[i + 1] : void 0;
 }
 async function runDemo() {
   const healthyDoc = demoWorkflow(false);
@@ -1744,48 +2572,14 @@ weekdays, six weeks of history. On day 22 the upstream API renamed a field.
     ...proposeFromStructure(DEMO_WORKFLOW_ID, hash, sinks),
     ...proposeFromObservation(DEMO_WORKFLOW_ID, sinks, healthyRuns)
   ];
-  rule(`Proposed contracts (${proposals.length})`);
+  rule(`Proposed expectations (${proposals.length})`);
   const byBasis = { intent: 0, structure: 0, observation: 0 };
   for (const p of proposals) byBasis[p.assertion.basis] += 1;
   console.log(
     `  ${byBasis.structure} from the graph's own definition, ${byBasis.observation} learned from ${healthyRuns.length} runs in the healthy window.`
   );
   console.log(c(C.dim, "  None of them can raise anything yet. A proposal is not a check."));
-  const ledger = new Ledger();
-  ledger.append("workflow-observed", DEMO_WORKFLOW_ID, { name: healthyDoc.name, hash });
-  const confirmed = [];
-  let refusedCount = 0;
-  for (const p of proposals) {
-    const needsAttestation = p.assertion.basis === "observation";
-    const result2 = confirmAssertion(
-      p.assertion,
-      {
-        by: "ops@agency.example",
-        at: healthyWindowEnd.toISOString(),
-        workflowHash: hash,
-        evidenceRunIds: healthyRuns.slice(0, 3).map((r) => r.id),
-        ...needsAttestation ? {
-          baselineAttestation: {
-            windowStart: timeline.startedAt,
-            windowEnd: healthyWindowEnd.toISOString(),
-            howKnown: "Reconciled row counts and a sample of email addresses against the Shopify admin export for that period"
-          }
-        } : {}
-      },
-      { currentWorkflowHash: hash }
-    );
-    if ("assertion" in result2) {
-      confirmed.push(result2.assertion);
-      ledger.append("assertion-confirmed", DEMO_WORKFLOW_ID, {
-        assertionId: result2.assertion.id,
-        statement: result2.assertion.statement,
-        basis: result2.assertion.basis,
-        by: "ops@agency.example"
-      });
-    } else {
-      refusedCount += 1;
-    }
-  }
+  const { confirmed, refusedCount } = confirmAllForDemo(proposals, hash, timeline, healthyRuns, healthyWindowEnd);
   rule("What a shrug gets you");
   const shrug = confirmAssertion(
     proposals.find((p) => p.assertion.basis === "observation").assertion,
@@ -1798,13 +2592,11 @@ weekdays, six weeks of history. On day 22 the upstream API renamed a field.
     },
     { currentWorkflowHash: hash }
   );
-  if ("refused" in shrug) {
-    console.log(`  ${c(C.yellow, "refused")}  ${shrug.refused.message}`);
-  }
+  if ("refused" in shrug) console.log(`  ${c(C.yellow, "refused")}  ${shrug.refused.message}`);
   console.log(`
   ${confirmed.length} confirmed, ${refusedCount} refused at the gate.`);
   const profile = inferCadence(healthyRuns);
-  rule("Verifying six weeks of runs against those contracts");
+  rule("Verifying six weeks of runs against those expectations");
   const result = audit({
     workflowId: DEMO_WORKFLOW_ID,
     workflowName: healthyDoc.name ?? "",
@@ -1819,35 +2611,9 @@ weekdays, six weeks of history. On day 22 the upstream API renamed a field.
   console.log(`  proven    ${c(C.green, String(result.counts.proven))}`);
   console.log(`  violated  ${c(C.red, String(result.counts.violated))}`);
   console.log(`  unproven  ${c(C.yellow, String(result.counts.unproven))}`);
-  const grouped = /* @__PURE__ */ new Map();
-  for (const v of result.violations) {
-    const key = v.result.assertionId;
-    const g = grouped.get(key);
-    if (g) {
-      g.count += 1;
-    } else {
-      grouped.set(key, {
-        statement: v.result.statement,
-        count: 1,
-        firstAt: v.at,
-        detail: v.result.detail,
-        evidence: v.result.evidence
-      });
-    }
-  }
-  rule(`What was caught (${grouped.size} distinct problems)`);
-  for (const g of [...grouped.values()].sort((a, b) => b.count - a.count)) {
-    console.log(`  ${c(C.red, "\u2717")} ${c(C.bold, g.statement)}`);
-    console.log(
-      g.firstAt ? `    ${g.count} run(s), first at ${new Date(g.firstAt).toISOString().slice(0, 16).replace("T", " ")}` : "    detected against the workflow as a whole rather than any single run"
-    );
-    if (g.detail) console.log(c(C.dim, `    ${g.detail}`));
-    if (g.evidence) console.log(`    ${c(C.blue, "captured:")} ${g.evidence.slice(0, 150)}`);
-    console.log("");
-  }
+  printFindings(result);
   rule("The check that would have rotted");
-  const changes = diffWorkflows(healthyDoc, editedDoc);
-  for (const ch of changes) console.log(`  ${ch.description}`);
+  for (const ch of diffWorkflows(healthyDoc, editedDoc)) console.log(`  ${ch.description}`);
   const editedHash = workflowHash(editedDoc);
   const afterEdit = audit({
     workflowId: DEMO_WORKFLOW_ID,
@@ -1860,163 +2626,371 @@ weekdays, six weeks of history. On day 22 the upstream API renamed a field.
     previousDoc: healthyDoc,
     currentDoc: editedDoc
   });
-  console.log("\n  The same contracts against the same runs, one revision later:");
+  console.log("\n  The same expectations against the same runs, one revision later:");
   console.log(`    proven    ${c(C.green, String(afterEdit.counts.proven))}  ${c(C.dim, `(was ${result.counts.proven})`)}`);
   console.log(`    violated  ${c(C.red, String(afterEdit.counts.violated))}  ${c(C.dim, `(was ${result.counts.violated})`)}`);
   console.log(`    unproven  ${c(C.yellow, String(afterEdit.counts.unproven))}  ${c(C.dim, `(was ${result.counts.unproven})`)}`);
   console.log(
-    c(C.dim, "\n  Nothing turned green, and nothing kept accusing. The checks stopped claiming\n  to describe a graph they were never confirmed against, and said so out loud.\n  That is the difference between a check that goes stale and one that rots.")
+    c(C.dim, "\n  Nothing turned green, and nothing kept accusing. The checks stopped claiming\n  to describe a graph they were never confirmed against, and said so out loud.")
   );
   rule("Honesty about coverage");
   console.log(`  ${result.honesty.sentence}`);
-  console.log(
-    c(C.dim, `
-  ${result.honesty.byBasis.intent} intent, ${result.honesty.byBasis.structure} structure, ${result.honesty.byBasis.observation} observation.`)
-  );
-  console.log(
-    c(C.dim, "  No check here traces back to a stated business intent, because nobody has\n  yet said what this workflow is for. Until they do, this can prove the sync\n  has not changed. It cannot prove it was ever right.")
-  );
-  const chain = ledger.verify();
-  rule("Evidence ledger");
-  console.log(`  ${ledger.length} entries, chain ${chain.ok ? c(C.green, "intact") : c(C.red, "broken")}.`);
-  console.log(c(C.dim, "  Every confirmation records who took responsibility and what they were shown."));
   console.log(`
-${c(C.dim, "Run it against your own n8n:")}
+${c(C.dim, "To use the review interface with this example loaded:")}
+  silentgreen seed
+  silentgreen review
+
+${c(C.dim, "Or against your own n8n:")}
   export N8N_URL=https://your-n8n.example  N8N_API_KEY=...
-  npx silentgreen scan
+  silentgreen scan && silentgreen review
 `);
 }
-async function runScan() {
-  const baseUrl = process.env.N8N_URL;
-  const apiKey = process.env.N8N_API_KEY;
-  if (!baseUrl || !apiKey) {
-    console.error(`Set N8N_URL and N8N_API_KEY first, either in the environment or in a .env file:
-
-  N8N_URL=https://your-n8n.example
-  N8N_API_KEY=n8n_api_...
-
-Create the key under Settings, n8n API. Read access is all this needs, and all
-it ever uses: there is no code path in this tool that writes to your instance.
-
-To see what it does without connecting anything, run:  npx silentgreen demo`);
-    process.exitCode = 1;
-    return;
-  }
-  const client = new N8nClient({ baseUrl, apiKey });
-  const workflows = await client.listWorkflows();
-  console.log(`
-${workflows.length} workflow(s) visible to this key.
-`);
-  for (const wf of workflows) {
-    const doc = await client.getWorkflow(wf.id);
-    const sinks = findSinks(doc);
-    const runs = await client.listRuns(wf.id, { limit: 50, includeData: true });
-    const proposals = [
-      ...proposeFromStructure(wf.id, wf.hash, sinks),
-      ...proposeFromObservation(wf.id, sinks, runs)
-    ];
-    const cadence = inferCadence(runs);
-    console.log(`${c(C.bold, wf.name)} ${c(C.dim, `(${wf.id}, ${wf.active ? "active" : "inactive"})`)}`);
-    console.log(c(C.dim, `  revision ${wf.hash.slice(0, 12)}, ${runs.length} recent run(s), ${sinks.length} sink(s)`));
-    if (runs.length === 0) {
-      console.log(c(C.yellow, "  No executions retained, so nothing can be proposed from observation yet."));
-    }
-    for (const p of proposals) {
-      const tag = p.assertion.basis === "observation" ? c(C.yellow, "observation") : c(C.blue, p.assertion.basis);
-      console.log(`  [${tag}] ${p.assertion.statement}`);
-      console.log(c(C.dim, `      ${p.rationale}`));
-    }
-    if (cadence) console.log(c(C.dim, `  cadence: ${cadence.reasoning}`));
-    console.log("");
-  }
-  console.log(c(C.dim, "Nothing above is active yet. A proposal cannot raise an alert until a person"));
-  console.log(c(C.dim, "confirms it, and observation-basis proposals additionally require you to state"));
-  console.log(c(C.dim, "which period you believe was correct, and how you know."));
-}
-async function runReport(outPath) {
-  const doc = demoWorkflow(false);
-  const hash = workflowHash(doc);
-  const timeline = demoTimeline();
-  const healthyEnd = Date.parse(timeline.startedAt) + timeline.breakageDay * 864e5;
-  const healthyRuns = timeline.runs.filter((r) => Date.parse(r.startedAt) < healthyEnd);
-  const sinks = findSinks(doc);
-  const proposals = [
-    ...proposeFromStructure(DEMO_WORKFLOW_ID, hash, sinks),
-    ...proposeFromObservation(DEMO_WORKFLOW_ID, sinks, healthyRuns)
-  ];
+function confirmAllForDemo(proposals, hash, timeline, healthyRuns, healthyWindowEnd) {
   const confirmed = [];
+  let refusedCount = 0;
   for (const p of proposals) {
-    const r = confirmAssertion(
+    const result = confirmAssertion(
       p.assertion,
       {
         by: "ops@agency.example",
-        at: new Date(healthyEnd).toISOString(),
+        at: healthyWindowEnd.toISOString(),
         workflowHash: hash,
-        evidenceRunIds: healthyRuns.slice(0, 3).map((x) => x.id),
+        evidenceRunIds: healthyRuns.slice(0, 3).map((r) => r.id),
         ...p.assertion.basis === "observation" ? {
           baselineAttestation: {
             windowStart: timeline.startedAt,
-            windowEnd: new Date(healthyEnd).toISOString(),
+            windowEnd: healthyWindowEnd.toISOString(),
             howKnown: "Reconciled row counts and a sample of email addresses against the Shopify admin export for that period"
           }
         } : {}
       },
       { currentWorkflowHash: hash }
     );
-    if ("assertion" in r) confirmed.push(r.assertion);
+    if ("assertion" in result) confirmed.push(result.assertion);
+    else refusedCount += 1;
   }
+  return { confirmed, refusedCount };
+}
+function printFindings(result) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const v of result.violations) {
+    const g = grouped.get(v.result.assertionId);
+    if (g) g.count += 1;
+    else
+      grouped.set(v.result.assertionId, {
+        statement: v.result.statement,
+        count: 1,
+        firstAt: v.at,
+        detail: v.result.detail,
+        evidence: v.result.evidence
+      });
+  }
+  if (grouped.size === 0) return;
+  rule(`What was caught (${grouped.size} distinct problems)`);
+  for (const g of [...grouped.values()].sort((a, b) => b.count - a.count)) {
+    console.log(`  ${c(C.red, "x")} ${c(C.bold, g.statement)}`);
+    console.log(
+      g.firstAt ? `    ${g.count} run(s), first at ${new Date(g.firstAt).toISOString().slice(0, 16).replace("T", " ")}` : "    detected against the workflow as a whole rather than any single run"
+    );
+    if (g.detail) console.log(c(C.dim, `    ${g.detail}`));
+    if (g.evidence) console.log(`    ${c(C.blue, "captured:")} ${g.evidence.slice(0, 150)}`);
+    console.log("");
+  }
+}
+function runSeed(storeDir) {
+  const doc = demoWorkflow(false);
+  const hash = workflowHash(doc);
+  const timeline = demoTimeline();
+  const healthyEnd = Date.parse(timeline.startedAt) + timeline.breakageDay * 864e5;
+  const healthyRuns = timeline.runs.filter((r) => Date.parse(r.startedAt) < healthyEnd);
+  const sinks = findSinks(doc);
   const profile = inferCadence(healthyRuns);
-  const result = audit({
-    workflowId: DEMO_WORKFLOW_ID,
-    workflowName: doc.name ?? "",
-    currentHash: hash,
-    runs: timeline.runs,
-    assertions: confirmed,
-    now: new Date(timeline.now),
+  const store = new Store(storeDir);
+  store.observeWorkflow({
+    id: DEMO_WORKFLOW_ID,
+    platform: "n8n",
+    name: doc.name ?? "Worked example",
+    active: true,
+    hash,
+    doc,
+    runs: healthyRuns,
     cadenceShape: { weekdaysOnly: profile?.weekdaysOnly, activeHours: profile?.activeHours }
   });
-  const ledger = new Ledger();
-  ledger.append("workflow-observed", DEMO_WORKFLOW_ID, { name: doc.name, hash });
-  for (const a of confirmed) {
-    ledger.append("assertion-confirmed", DEMO_WORKFLOW_ID, { assertionId: a.id, statement: a.statement, basis: a.basis, by: a.confirmation?.by });
+  store.setClient(DEMO_WORKFLOW_ID, "worked-example", "Fernweh Supply (worked example)");
+  const proposals = [
+    ...proposeFromStructure(DEMO_WORKFLOW_ID, hash, sinks),
+    ...proposeFromObservation(DEMO_WORKFLOW_ID, sinks, healthyRuns)
+  ];
+  const { added, skipped } = store.addProposals(proposals);
+  store.save();
+  console.log(`
+Loaded the worked example into ${storeDir}/
+
+  1 workflow, ${added} expectations waiting for review${skipped ? ` (${skipped} already present)` : ""}.
+
+Nothing is live yet, and nothing can raise anything until you confirm it. That is
+the point of the next step:
+
+  silentgreen review
+
+Everything here is fabricated data held on your own disk. Delete ${storeDir}/ to remove it.
+`);
+}
+async function runScan(storeDir) {
+  const baseUrl = process.env.N8N_URL;
+  const apiKey = process.env.N8N_API_KEY;
+  if (!baseUrl || !apiKey) {
+    console.error(`Set N8N_URL and N8N_API_KEY first, in the environment or a .env file:
+
+  N8N_URL=https://your-n8n.example
+  N8N_API_KEY=n8n_api_...
+
+Create the key under Settings, n8n API. Read access is all this needs and all it
+ever uses: there is no code path in this tool that writes to your instance.
+
+To try the review interface with no instance at all:  silentgreen seed`);
+    process.exitCode = 1;
+    return;
   }
-  for (const v of result.violations.slice(0, 50)) {
-    ledger.append("violation", DEMO_WORKFLOW_ID, { assertionId: v.result.assertionId, runId: v.runId, detail: v.result.detail });
+  const client = new N8nClient({ baseUrl, apiKey });
+  const store = new Store(storeDir);
+  const workflows = await client.listWorkflows();
+  console.log(`
+${workflows.length} workflow(s) visible to this key.
+`);
+  let totalAdded = 0;
+  for (const wf of workflows) {
+    const doc = await client.getWorkflow(wf.id);
+    const sinks = findSinks(doc);
+    const runs = await client.listRuns(wf.id, { limit: 50, includeData: true });
+    const profile = inferCadence(runs);
+    const { changes, staled } = store.observeWorkflow({
+      id: wf.id,
+      platform: "n8n",
+      name: wf.name,
+      active: wf.active,
+      hash: wf.hash,
+      doc,
+      runs,
+      cadenceShape: { weekdaysOnly: profile?.weekdaysOnly, activeHours: profile?.activeHours }
+    });
+    const proposals = [
+      ...proposeFromStructure(wf.id, wf.hash, sinks),
+      ...proposeFromObservation(wf.id, sinks, runs)
+    ];
+    const { added, skipped } = store.addProposals(proposals);
+    totalAdded += added;
+    console.log(`${c(C.bold, wf.name)} ${c(C.dim, `(${wf.active ? "active" : "inactive"}, revision ${wf.hash.slice(0, 10)})`)}`);
+    console.log(c(C.dim, `  ${runs.length} recent run(s), ${sinks.length} sink(s), ${added} new expectation(s)${skipped ? `, ${skipped} already on file` : ""}`));
+    if (runs.length === 0) {
+      console.log(c(C.yellow, "  No executions retained, so nothing can be proposed from observation yet."));
+    }
+    if (changes.length > 0) {
+      console.log(c(C.yellow, `  This workflow changed since the last scan. ${staled} confirmed check(s) went stale:`));
+      for (const ch of changes.slice(0, 6)) console.log(c(C.dim, `    ${ch.description}`));
+    }
+    console.log("");
   }
+  store.save();
+  console.log(`${totalAdded} expectation(s) waiting for review. Nothing is live until confirmed:
+
+  silentgreen review
+`);
+}
+async function runVerify(storeDir) {
+  const store = new Store(storeDir);
+  const workflows = store.workflows();
+  if (workflows.length === 0) {
+    console.error(`Nothing in ${storeDir}/ yet. Run "silentgreen scan", or "silentgreen seed" to try it with the worked example.`);
+    process.exitCode = 1;
+    return;
+  }
+  const baseUrl = process.env.N8N_URL;
+  const apiKey = process.env.N8N_API_KEY;
+  const client = baseUrl && apiKey ? new N8nClient({ baseUrl, apiKey }) : void 0;
+  let anyViolation = false;
+  for (const wf of workflows) {
+    const confirmed = store.assertions(wf.id).filter((a) => a.status === "confirmed");
+    const isWorkedExample = wf.id === DEMO_WORKFLOW_ID;
+    let runs;
+    let now = /* @__PURE__ */ new Date();
+    if (isWorkedExample) {
+      const t = demoTimeline();
+      runs = t.runs;
+      now = new Date(t.now);
+    } else if (client) {
+      runs = await client.listRuns(wf.id, { limit: 50, includeData: true });
+    } else {
+      console.log(`${c(C.bold, wf.name)}`);
+      console.log(c(C.yellow, "  Skipped: no N8N_URL and N8N_API_KEY, so recent runs could not be fetched."));
+      continue;
+    }
+    const result = audit({
+      workflowId: wf.id,
+      workflowName: wf.name,
+      currentHash: wf.hash,
+      runs,
+      assertions: confirmed,
+      now,
+      cadenceShape: wf.cadenceShape
+    });
+    console.log(`${c(C.bold, wf.name)}${isWorkedExample ? c(C.dim, "  (worked example, fabricated data)") : ""}`);
+    console.log(`  ${result.headline}`);
+    console.log(
+      `  proven ${c(C.green, String(result.counts.proven))}  violated ${c(C.red, String(result.counts.violated))}  unproven ${c(C.yellow, String(result.counts.unproven))}`
+    );
+    for (const v of result.violations) {
+      store.ledger.append(
+        v.result.verdict === "violated" && !v.runId ? "absence-detected" : "violation",
+        wf.id,
+        {
+          assertionId: v.result.assertionId,
+          statement: v.result.statement,
+          runId: v.runId,
+          detail: v.result.detail,
+          evidence: v.result.evidence
+        },
+        { clientId: wf.clientId }
+      );
+    }
+    store.ledger.append(
+      "run-verified",
+      wf.id,
+      { runsExamined: result.runsExamined, proven: result.counts.proven, violated: result.counts.violated, unproven: result.counts.unproven },
+      { clientId: wf.clientId }
+    );
+    if (result.counts.violated > 0) anyViolation = true;
+    printFindings(result);
+  }
+  store.save();
+  console.log(c(C.dim, `Recorded in ${storeDir}/ledger.jsonl. Exit code is 1 when anything was violated, so this fits a cron job.`));
+  if (anyViolation) process.exitCode = 1;
+}
+async function runReport(storeDir, outPath, clientFilter) {
+  const store = new Store(storeDir);
+  const workflows = store.workflows().filter((w) => !clientFilter || w.clientId === clientFilter);
+  if (workflows.length === 0) {
+    console.error(`No workflows in ${storeDir}/${clientFilter ? ` for client "${clientFilter}"` : ""}. Run "silentgreen seed" or "silentgreen scan" first.`);
+    process.exitCode = 1;
+    return;
+  }
+  const wf = workflows[0];
+  const confirmed = store.assertions(wf.id).filter((a) => a.status === "confirmed");
+  const isWorkedExample = wf.id === DEMO_WORKFLOW_ID;
+  const baseUrl = process.env.N8N_URL;
+  const apiKey = process.env.N8N_API_KEY;
+  let runs = [];
+  let now = /* @__PURE__ */ new Date();
+  let periodStart = new Date(Date.now() - 30 * 864e5).toISOString();
+  if (isWorkedExample) {
+    const t = demoTimeline();
+    runs = t.runs;
+    now = new Date(t.now);
+    periodStart = t.startedAt;
+  } else if (baseUrl && apiKey) {
+    runs = await new N8nClient({ baseUrl, apiKey }).listRuns(wf.id, { limit: 200, includeData: true });
+    if (runs.length > 0) periodStart = runs[runs.length - 1].startedAt;
+  }
+  const result = audit({
+    workflowId: wf.id,
+    workflowName: wf.name,
+    currentHash: wf.hash,
+    runs,
+    assertions: confirmed,
+    now,
+    cadenceShape: wf.cadenceShape,
+    previousDoc: wf.previousDoc,
+    currentDoc: wf.doc
+  });
+  const platform = {
+    executions: runs.length,
+    succeeded: runs.filter((r) => r.platformStatus === "success").length,
+    failed: runs.filter((r) => r.platformStatus === "error").length,
+    sentence: `${runs.length} executions, ${runs.filter((r) => r.platformStatus === "success").length} successful, ${runs.filter((r) => r.platformStatus === "error").length} failed.`
+  };
   const html = renderReport({
     result,
     assertions: confirmed,
-    ledger,
-    periodStart: timeline.startedAt,
-    periodEnd: timeline.now,
-    clientName: "Fernweh Supply",
-    preparedBy: "ops@agency.example",
-    platform: platformSummary(timeline)
+    ledger: store.ledger,
+    periodStart,
+    periodEnd: now.toISOString(),
+    clientName: wf.clientId ? store.clients()[wf.clientId]?.name ?? wf.clientId : wf.name,
+    preparedBy: confirmed[0]?.confirmation?.by ?? "silentgreen",
+    platform
   });
-  writeFileSync(outPath, html, "utf8");
+  writeFileSync2(outPath, html, "utf8");
   console.log(`Report written to ${outPath}`);
+  if (isWorkedExample) console.log(c(C.dim, "This one is the worked example, so the figures are fabricated. Say so if you show it to anybody."));
+}
+function runStatus(storeDir) {
+  const store = new Store(storeDir);
+  const wfs = store.workflows();
+  const chain = store.ledger.verify();
+  console.log(`
+${c(C.bold, "silentgreen")} ${c(C.dim, storeDir + "/")}`);
+  console.log(c(C.dim, `${store.ledger.length} ledger entries, chain ${chain.ok ? "intact" : "BROKEN"}
+`));
+  if (wfs.length === 0) {
+    console.log('Nothing scanned yet. Try "silentgreen seed" or "silentgreen scan".\n');
+    return;
+  }
+  for (const wf of wfs) {
+    const n = store.counts(wf.id);
+    console.log(`${c(C.bold, wf.name)} ${c(C.dim, `(${wf.hash.slice(0, 10)}, scanned ${wf.lastScannedAt.slice(0, 10)})`)}`);
+    console.log(
+      `  ${n.proposed} to review, ${c(C.green, String(n.confirmed))} live${n.stale ? `, ${c(C.yellow, String(n.stale))} stale` : ""}${n.retired ? `, ${n.retired} retired` : ""}`
+    );
+    const honesty = store.assertions(wf.id);
+    const live = honesty.filter((a) => a.status === "confirmed");
+    if (live.length === 0) {
+      console.log(c(C.yellow, "  Nothing is being verified. Any green elsewhere means code ran, not that work happened."));
+    }
+    console.log("");
+  }
 }
 async function main() {
   const [command = "demo", ...rest] = process.argv.slice(2);
+  const storeDir = arg(rest, "--store") ?? STORE_DIR;
   switch (command) {
     case "demo":
       return runDemo();
+    case "seed":
+      return runSeed(storeDir);
     case "scan":
-      return runScan();
-    case "report": {
-      const i = rest.indexOf("--out");
-      return runReport(i >= 0 ? rest[i + 1] ?? "silentgreen-report.html" : "silentgreen-report.html");
+      return runScan(storeDir);
+    case "verify":
+      return runVerify(storeDir);
+    case "status":
+      return runStatus(storeDir);
+    case "review": {
+      const port = Number(arg(rest, "--port") ?? 4666);
+      const { url } = await serve({ port, storeDir });
+      console.log(`
+${c(C.bold, "Review interface")}  ${url}
+
+Reading ${storeDir}/. Confirm or refuse the expectations waiting there.
+Nothing can raise an alert until you do. Press Ctrl+C to stop.
+`);
+      return new Promise(() => {
+      });
     }
+    case "report":
+      return runReport(storeDir, arg(rest, "--out") ?? "silentgreen-report.html", arg(rest, "--client"));
     case "help":
     case "--help":
     case "-h":
       console.log(`silentgreen
 
-  demo                    the worked example, no credentials needed
-  scan                    read an n8n instance and propose contracts
-  report --out FILE.html  produce the client evidence report
+  demo                     the worked example, printed. No credentials needed.
+  seed                     load that example into a local store
+  scan                     read an n8n instance and propose expectations
+  review [--port 4666]     open the review interface to confirm them
+  verify                   check recent runs against confirmed expectations
+  report [--out f.html]    produce the client evidence record
+  status                   what is in the store
 
-  N8N_URL, N8N_API_KEY    read-only credentials for scan
+  --store DIR              where to keep state (default ${STORE_DIR}/)
+  N8N_URL, N8N_API_KEY     read-only credentials for scan and verify
 `);
       return;
     default:

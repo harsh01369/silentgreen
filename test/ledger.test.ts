@@ -84,3 +84,29 @@ describe('the evidence ledger', () => {
     assert.equal(verifyChain([]).ok, true);
   });
 });
+
+describe('hashing survives a round trip through disk', () => {
+  test('a key whose value is undefined does not change the hash', () => {
+    // JSON.stringify drops undefined values, so an entry carrying one hashed
+    // differently in memory than after being read back, and the chain failed to
+    // verify on every restart. A tamper-evident log that cries wolf is worse
+    // than none, because the first thing anyone does is stop believing it.
+    const withUndefined = hashEntry({
+      seq: 0, at: 'T', kind: 'assertion-confirmed', workflowId: 'w', prevHash: GENESIS_PREV,
+      payload: { by: 'harsh', baselineAttestation: undefined },
+    });
+    const asReloaded = hashEntry({
+      seq: 0, at: 'T', kind: 'assertion-confirmed', workflowId: 'w', prevHash: GENESIS_PREV,
+      payload: JSON.parse(JSON.stringify({ by: 'harsh', baselineAttestation: undefined })),
+    });
+    assert.equal(withUndefined, asReloaded);
+  });
+
+  test('a real chain verifies after a full serialise and parse', () => {
+    const l = new Ledger();
+    l.append('assertion-confirmed', 'wf_1', { by: 'harsh', baselineAttestation: undefined });
+    l.append('violation', 'wf_1', { detail: 'produced no items', runId: undefined });
+    const roundTripped = JSON.parse(JSON.stringify(l.all())) as LedgerEntry[];
+    assert.equal(verifyChain(roundTripped).ok, true);
+  });
+});
