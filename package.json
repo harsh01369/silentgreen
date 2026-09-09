@@ -1,0 +1,42 @@
+{
+  "name": "silentgreen",
+  "version": "0.1.0",
+  "description": "Proves your automations did their job, or says plainly that it cannot. Catches runs that report success and accomplish nothing, workflows that quietly stopped firing, and checks that went stale when the workflow changed underneath them.",
+  "type": "module",
+  "bin": {
+    "silentgreen": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "build": "node build.mjs && tsc --emitDeclarationOnly",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run check && npm test && npm run build"
+  },
+  "keywords": [
+    "n8n",
+    "make.com",
+    "workflow",
+    "automation",
+    "monitoring",
+    "observability",
+    "silent-failure",
+    "verification",
+    "data-contract",
+    "reliability"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
