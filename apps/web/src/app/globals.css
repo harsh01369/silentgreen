@@ -1,0 +1,84 @@
+@import 'tailwindcss';
+
+/*
+  silentgreen palette.
+
+  The green is not a reassuring green. It is patina: the colour a claim takes on
+  when it has sat unquestioned for a long time. "unproven" is the deliberate
+  one, an unsaturated slate that reads as withheld judgement rather than an
+  error, because a first-class unproven verdict is the whole point.
+*/
+@theme {
+  --color-ink: #0a0e14;
+  --color-ink-raised: #111823;
+  --color-ink-sunken: #070a0f;
+
+  --color-patina: #3da47e;
+  --color-patina-bright: #6fe3b8;
+  --color-amber: #d9924e;
+  --color-slate-verdict: #7c8a9c;
+
+  --color-paper: #e8edf0;
+  --color-paper-dim: #9aa6b2;
+  --color-paper-faint: #61707e;
+
+  --color-line: rgba(232, 237, 240, 0.09);
+  --color-line-bright: rgba(232, 237, 240, 0.16);
+
+  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, 'SF Mono', monospace;
+
+  --radius-glass: 16px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background:
+    radial-gradient(1200px 800px at 15% -10%, rgba(61, 164, 126, 0.1), transparent 60%),
+    radial-gradient(900px 700px at 110% 10%, rgba(111, 140, 200, 0.06), transparent 55%),
+    var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv05', 'cv08', 'ss01';
+  min-height: 100dvh;
+}
+
+::selection {
+  background: rgba(111, 227, 184, 0.24);
+}
+
+/* A glass panel. Used for every raised surface, so the product has one material. */
+.glass {
+  background: linear-gradient(160deg, rgba(232, 237, 240, 0.055), rgba(232, 237, 240, 0.02));
+  border: 1px solid var(--color-line-bright);
+  border-radius: var(--radius-glass);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  box-shadow:
+    0 1px 0 0 rgba(232, 237, 240, 0.06) inset,
+    0 24px 60px -24px rgba(0, 0, 0, 0.6);
+}
+
+.glass-quiet {
+  background: rgba(232, 237, 240, 0.025);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-glass);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
