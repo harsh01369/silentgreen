@@ -3046,6 +3046,120 @@ function checkGrounding(output, sources, opts = {}) {
   return { checked: atoms.length, ungrounded, inconclusive: false };
 }
 
+// src/verify/consistency.ts
+var MONEY = String.raw`(?:[$£€¥]\s?\d[\d,]*(?:\.\d{1,2})?|\d[\d,]*\.\d{2})(?!\s?%|\d)`;
+function amount(s) {
+  return Number(s.replace(/[^0-9.]/g, ""));
+}
+function near(a, b) {
+  return Math.abs(a - b) <= 0.02 + Math.max(Math.abs(a), Math.abs(b)) * 1e-6;
+}
+var SUBTOTAL_LABELS = ["subtotal", "sub-total", "sub total", "net amount", "net total", "goods total"];
+var TAX_LABELS = ["vat", "tax", "gst", "sales tax"];
+var TOTAL_LABELS = ["grand total", "total due", "total amount due", "amount due", "total payable", "amount payable", "balance due", "total", "balance", "outstanding balance"];
+var ADJUSTMENT_LABELS = ["shipping", "delivery", "postage", "discount", "credit", "handling", "fee", "surcharge", "adjustment"];
+function labelPattern(label) {
+  const gap = String.raw`(?:[^\d$£€¥\n]|\d{1,3}(?:\.\d+)?\s?%){0,20}?`;
+  return `\\b${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b${gap}(${MONEY})`;
+}
+function labelled(text, labels) {
+  for (const label of labels) {
+    const m = new RegExp(labelPattern(label), "i").exec(text);
+    if (m && m[1]) return { value: amount(m[1]), raw: `${label} ${m[1].trim()}` };
+  }
+  return void 0;
+}
+function allLabelled(text, labels) {
+  const out = [];
+  for (const label of labels) {
+    for (const m of text.matchAll(new RegExp(labelPattern(label), "gi"))) {
+      if (m[1]) out.push({ value: amount(m[1]), raw: `${label} ${m[1].trim()}` });
+    }
+  }
+  return out;
+}
+function checkArithmetic(text, out) {
+  const sub = labelled(text, SUBTOTAL_LABELS);
+  const tax = labelled(text, TAX_LABELS);
+  const total = labelled(text, TOTAL_LABELS);
+  if (!sub || !total) return;
+  const hasAdjustment = ADJUSTMENT_LABELS.some((l) => new RegExp(`\\b${l}\\b`, "i").test(text));
+  if (hasAdjustment) return;
+  const expected = sub.value + (tax?.value ?? 0);
+  if (!near(expected, total.value)) {
+    out.push({
+      kind: "arithmetic",
+      summary: tax ? `The subtotal and tax do not add up to the stated total: ${sub.value.toFixed(2)} + ${tax.value.toFixed(2)} is ${expected.toFixed(2)}, not ${total.value.toFixed(2)}.` : `The subtotal does not match the stated total, and no tax or adjustment is given to bridge them: ${sub.value.toFixed(2)} against ${total.value.toFixed(2)}.`,
+      evidence: [sub.raw, tax?.raw, total.raw].filter(Boolean).join("; ")
+    });
+  }
+}
+function checkRestatedValue(text, out) {
+  for (const [name, labels] of [
+    ["total", TOTAL_LABELS],
+    ["subtotal", SUBTOTAL_LABELS],
+    ["tax", TAX_LABELS]
+  ]) {
+    const seen = allLabelled(text, labels);
+    if (seen.length < 2) continue;
+    const distinct = [...new Set(seen.map((s) => s.value.toFixed(2)))];
+    if (distinct.length > 1) {
+      out.push({
+        kind: "restated-value",
+        summary: `The answer gives more than one figure for the ${name}: ${distinct.join(" and ")}.`,
+        evidence: seen.map((s) => s.raw).join("; ")
+      });
+      return;
+    }
+  }
+}
+function checkPercentage(text, out) {
+  const sub = labelled(text, SUBTOTAL_LABELS);
+  const pct = /\b(\d{1,2}(?:\.\d+)?)\s?%/.exec(text);
+  const tax = labelled(text, TAX_LABELS);
+  if (!sub || !pct || !tax || !pct[1]) return;
+  const rate = Number(pct[1]) / 100;
+  const expected = sub.value * rate;
+  if (Math.abs(expected - tax.value) > 0.5 + sub.value * 1e-3) {
+    out.push({
+      kind: "percentage",
+      summary: `Tax is stated as ${pct[1]}% but the amount does not match: ${pct[1]}% of ${sub.value.toFixed(2)} is ${expected.toFixed(2)}, not ${tax.value.toFixed(2)}.`,
+      evidence: `${sub.raw}; rate ${pct[1]}%; ${tax.raw}`
+    });
+  }
+}
+var ISSUE_LABELS = ["issued", "issue date", "invoice date", "order date", "dated", "created"];
+var DUE_LABELS = ["due", "due date", "payment due", "pay by", "payable by"];
+function isoDate(text, labels) {
+  for (const label of labels) {
+    const re = new RegExp(`\\b${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^\\d\\n]{0,16}?(\\d{4}-\\d{2}-\\d{2})`, "i");
+    const m = re.exec(text);
+    if (m && m[1]) return { iso: m[1], raw: `${label} ${m[1]}` };
+  }
+  return void 0;
+}
+function checkDateOrder(text, out) {
+  const issued = isoDate(text, ISSUE_LABELS);
+  const due = isoDate(text, DUE_LABELS);
+  if (issued && due && due.iso < issued.iso) {
+    out.push({
+      kind: "date-order",
+      summary: `The due date is before the issue date: due ${due.iso}, issued ${issued.iso}.`,
+      evidence: `${issued.raw}; ${due.raw}`
+    });
+  }
+}
+function checkConsistency(output) {
+  if (!output || output.trim().length === 0) return [];
+  const text = output.replace(/ /g, " ");
+  const out = [];
+  checkArithmetic(text, out);
+  checkRestatedValue(text, out);
+  checkPercentage(text, out);
+  checkDateOrder(text, out);
+  return out;
+}
+
 // src/aiwork/check.ts
 var DEGENERATE_PATTERNS = [
   "empty-string",
@@ -3082,7 +3196,7 @@ function checkBatch(records, opts = {}) {
     counts.set(fp, (counts.get(fp) ?? 0) + 1);
   }
   const results = [];
-  const byKind = { degenerate: 0, ungrounded: 0, deferred: 0, duplicated: 0 };
+  const byKind = { degenerate: 0, ungrounded: 0, deferred: 0, duplicated: 0, inconsistent: 0 };
   for (const record of records) {
     const problems = [];
     for (const pattern of DEGENERATE_PATTERNS) {
@@ -3110,6 +3224,9 @@ function checkBatch(records, opts = {}) {
         summary: `This exact answer was produced for ${dupCount} different tasks, which usually means the pipeline stopped reading its input.`,
         evidence: record.output.slice(0, 200)
       });
+    }
+    for (const bad of checkConsistency(record.output)) {
+      problems.push({ kind: "inconsistent", summary: bad.summary, evidence: bad.evidence });
     }
     let inconclusive2 = false;
     let inconclusiveReason;
@@ -3158,7 +3275,7 @@ function checkBatch(records, opts = {}) {
       inconclusive: inconclusiveCount,
       byKind,
       headline,
-      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
     }
   };
 }
@@ -3374,6 +3491,50 @@ var inconclusive = [
     label: { id: "ic-03-acknowledgement", verdict: "inconclusive" }
   }
 ];
+var contradiction = [
+  {
+    id: "sc-01-arithmetic",
+    source: "Subtotal 400.00 GBP, VAT 80.00 GBP, total 520.00 GBP.",
+    output: "Your subtotal is \xA3400.00, VAT is \xA380.00, and the total due is \xA3520.00.",
+    label: { id: "sc-01-arithmetic", verdict: "problem", kinds: ["inconsistent"], note: "400 + 80 is 480, not 520" }
+  },
+  {
+    id: "sc-02-restated-total",
+    source: "Amount outstanding varies by reading; see the statement.",
+    output: "Your total is \xA3560.00. Please pay the amount due of \xA3650.00 by the end of the month.",
+    label: { id: "sc-02-restated-total", verdict: "problem", kinds: ["inconsistent"], note: "two different totals in one answer" }
+  },
+  {
+    id: "sc-03-date-order",
+    source: "Invoice issued 2026-09-20. Payment terms: net 15.",
+    output: "The invoice was issued on 2026-09-20 and payment is due on 2026-09-05.",
+    label: { id: "sc-03-date-order", verdict: "problem", kinds: ["inconsistent"], note: "due date precedes the issue date" }
+  },
+  {
+    id: "sc-04-percentage",
+    source: "Subtotal 500.00 GBP. VAT is charged at 20%.",
+    output: "The subtotal is \xA3500.00 and VAT at 20% comes to \xA3120.00.",
+    label: { id: "sc-04-percentage", verdict: "problem", kinds: ["inconsistent"], note: "20% of 500 is 100, not 120" }
+  },
+  {
+    id: "sc-05-consistent",
+    source: "Subtotal 571.00 GBP, VAT 114.20 GBP, total 685.20 GBP.",
+    output: "Subtotal \xA3571.00, VAT \xA3114.20, total due \xA3685.20.",
+    label: { id: "sc-05-consistent", verdict: "clean", note: "the figures add up" }
+  },
+  {
+    id: "sc-06-adjustment-line",
+    source: "Subtotal 400.00 GBP. Shipping 15.00 GBP. VAT 83.00 GBP. Total 498.00 GBP.",
+    output: "Subtotal is \xA3400.00, shipping \xA315.00, VAT \xA383.00, for a total of \xA3498.00.",
+    label: { id: "sc-06-adjustment-line", verdict: "clean", note: "a shipping line bridges the sum, so the arithmetic check must stand down" }
+  },
+  {
+    id: "sc-07-date-order-ok",
+    source: "Invoice issued 2026-09-01, due 2026-09-30.",
+    output: "It was issued on 2026-09-01 and is due on 2026-09-30.",
+    label: { id: "sc-07-date-order-ok", verdict: "clean" }
+  }
+];
 function casesToRecords(cases) {
   return {
     records: cases.map((k) => ({
@@ -3390,11 +3551,13 @@ function builtinBatches() {
   const fab = casesToRecords(fabricated);
   const deg = casesToRecords(degenerate);
   const inc = casesToRecords(inconclusive);
+  const con = casesToRecords(contradiction);
   return [
     { name: "billing-support", synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: "faithful-adversarial", synthetic: true, records: faith.records, labels: faith.labels },
     { name: "fabrication-adversarial", synthetic: true, records: fab.records, labels: fab.labels },
     { name: "degenerate-and-deferral", synthetic: true, records: deg.records, labels: deg.labels },
+    { name: "self-contradiction", synthetic: true, records: con.records, labels: con.labels },
     { name: "inconclusive", synthetic: true, records: inc.records, labels: inc.labels }
   ];
 }
@@ -3799,7 +3962,8 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     ["ungrounded", "facts absent from the source material"],
     ["degenerate", "empty, unrendered or refused"],
     ["deferred", "handed the task back instead of doing it"],
-    ["duplicated", "the same answer across different tasks"]
+    ["duplicated", "the same answer across different tasks"],
+    ["inconsistent", "the answer contradicts itself"]
   ];
   console.log("");
   for (const [k, label] of kinds) {

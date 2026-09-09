@@ -139,7 +139,7 @@ const data = {
 };
 
 writeFileSync(new URL('./demo-data.js', import.meta.url), `window.SG = ${JSON.stringify(data, null, 2)};\n`, 'utf8');
-console.log(`site/demo-data.js written: ${cells.length} executions, ${data.findings.length} findings, ${verified.counts.violated} violations.`);
+console.log(`docs/demo-data.js written: ${cells.length} executions, ${data.findings.length} findings, ${verified.counts.violated} violations.`);
 
 /* ---- the AI work example, so the hero can show a real fabrication ---- */
 

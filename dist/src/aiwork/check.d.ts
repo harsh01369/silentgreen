@@ -21,7 +21,7 @@
  */
 import { type GroundingOptions } from '../verify/grounding';
 import { type TaskRecord } from './record';
-export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated';
+export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated' | 'inconsistent';
 export interface TaskProblem {
     readonly kind: TaskProblemKind;
     /** One sentence, written for somebody deciding whether to act. */

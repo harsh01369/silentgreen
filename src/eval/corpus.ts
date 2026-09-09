@@ -218,6 +218,53 @@ const inconclusive: readonly Case[] = [
   },
 ];
 
+/* --------------------------------------------------------- self-contradiction */
+
+const contradiction: readonly Case[] = [
+  {
+    id: 'sc-01-arithmetic',
+    source: 'Subtotal 400.00 GBP, VAT 80.00 GBP, total 520.00 GBP.',
+    output: 'Your subtotal is £400.00, VAT is £80.00, and the total due is £520.00.',
+    label: { id: 'sc-01-arithmetic', verdict: 'problem', kinds: ['inconsistent'], note: '400 + 80 is 480, not 520' },
+  },
+  {
+    id: 'sc-02-restated-total',
+    source: 'Amount outstanding varies by reading; see the statement.',
+    output: 'Your total is £560.00. Please pay the amount due of £650.00 by the end of the month.',
+    label: { id: 'sc-02-restated-total', verdict: 'problem', kinds: ['inconsistent'], note: 'two different totals in one answer' },
+  },
+  {
+    id: 'sc-03-date-order',
+    source: 'Invoice issued 2026-09-20. Payment terms: net 15.',
+    output: 'The invoice was issued on 2026-09-20 and payment is due on 2026-09-05.',
+    label: { id: 'sc-03-date-order', verdict: 'problem', kinds: ['inconsistent'], note: 'due date precedes the issue date' },
+  },
+  {
+    id: 'sc-04-percentage',
+    source: 'Subtotal 500.00 GBP. VAT is charged at 20%.',
+    output: 'The subtotal is £500.00 and VAT at 20% comes to £120.00.',
+    label: { id: 'sc-04-percentage', verdict: 'problem', kinds: ['inconsistent'], note: '20% of 500 is 100, not 120' },
+  },
+  {
+    id: 'sc-05-consistent',
+    source: 'Subtotal 571.00 GBP, VAT 114.20 GBP, total 685.20 GBP.',
+    output: 'Subtotal £571.00, VAT £114.20, total due £685.20.',
+    label: { id: 'sc-05-consistent', verdict: 'clean', note: 'the figures add up' },
+  },
+  {
+    id: 'sc-06-adjustment-line',
+    source: 'Subtotal 400.00 GBP. Shipping 15.00 GBP. VAT 83.00 GBP. Total 498.00 GBP.',
+    output: 'Subtotal is £400.00, shipping £15.00, VAT £83.00, for a total of £498.00.',
+    label: { id: 'sc-06-adjustment-line', verdict: 'clean', note: 'a shipping line bridges the sum, so the arithmetic check must stand down' },
+  },
+  {
+    id: 'sc-07-date-order-ok',
+    source: 'Invoice issued 2026-09-01, due 2026-09-30.',
+    output: 'It was issued on 2026-09-01 and is due on 2026-09-30.',
+    label: { id: 'sc-07-date-order-ok', verdict: 'clean' },
+  },
+];
+
 /* -------------------------------------------------------------------- assembly */
 
 function casesToRecords(cases: readonly Case[]): { records: readonly TaskRecord[]; labels: readonly TaskLabel[] } {
@@ -237,12 +284,14 @@ export function builtinBatches(): readonly LabelledBatch[] {
   const fab = casesToRecords(fabricated);
   const deg = casesToRecords(degenerate);
   const inc = casesToRecords(inconclusive);
+  const con = casesToRecords(contradiction);
 
   return [
     { name: 'billing-support', synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: 'faithful-adversarial', synthetic: true, records: faith.records, labels: faith.labels },
     { name: 'fabrication-adversarial', synthetic: true, records: fab.records, labels: fab.labels },
     { name: 'degenerate-and-deferral', synthetic: true, records: deg.records, labels: deg.labels },
+    { name: 'self-contradiction', synthetic: true, records: con.records, labels: con.labels },
     { name: 'inconclusive', synthetic: true, records: inc.records, labels: inc.labels },
   ];
 }
