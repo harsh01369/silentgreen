@@ -415,11 +415,57 @@ real batches that neither the builder nor a fixture author wrote.
 
 ### Phase 2: the hosted free tier
 
-- Auth, organisation and project model, API keys.
-- Push API and a batch ingest endpoint.
-- Dashboard and task inspector.
-- Redacted evidence store, ledger in Postgres with the chain preserved.
-- One-click connect for LangSmith and Langfuse.
+**Infrastructure, decided.**
+
+| piece | choice | why |
+| --- | --- | --- |
+| API host | Railway | the engine already runs as a Node service; matches the builder's existing stack |
+| Web host | Vercel | Next.js App Router for the heavy 3D marketing site plus the app shell |
+| Database | Neon Postgres | serverless, branchable, same stack the builder already runs |
+| Auth | Better Auth | a library, not a service. Identity lives in Neon, not a vendor cloud, which is the only posture consistent with a product that tells agencies their evidence stays theirs. First-party `organization` and `apiKey` plugins cover orgs, members, roles, invitations and org-owned keys with rate limiting and expiry. SSO is a plugin when the agency tier needs it, or WorkOS bolted on for connections only. |
+| ORM | Drizzle | TypeScript-native, light, has a Better Auth adapter, migrations run from the API service |
+
+**Repo shape.** The root stays the OSS engine and CLI package, unchanged, so
+`npx github:harsh01369/silentgreen` keeps working. It gains an `exports` map so the
+engine is importable as a library. Two app packages sit alongside:
+
+```
+silentgreen/
+  src/  test/  dist/        the engine and CLI, the npm package (unchanged)
+  action.yml  docs/         the GitHub Action, the current static site
+  apps/
+    api/                    Express on Railway. depends on the engine by file ref.
+    web/                    Next.js on Vercel.
+```
+
+**Database schema.**
+
+- Better Auth tables: `user`, `session`, `account`, `verification`, `organization`,
+  `member`, `invitation`, `apikey`.
+- `project` (orgId, name, slug)
+- `batch` (projectId, source, taskCount, uploadedAt, uploadedBy)
+- `task_result` (batchId, taskId, verdict, atomsChecked, at)
+- `problem` (taskResultId, kind, summary, evidenceRedacted, offsets). On the free tier
+  `evidenceRedacted` keeps the atom kind, the match result and character offsets, never the
+  personal value.
+- `ledger_entry` (projectId, seq, hash, prevHash, payload, at) - the hash chain from
+  `src/ledger/chain.ts`, moved into Postgres, one chain per project.
+
+**API surface (v1).**
+
+- `POST /v1/batches` - API key auth. Runs the engine, stores results and a ledger entry,
+  returns the summary. This is the whole product for a developer: one call.
+- `GET /v1/projects/:id/summary` - verdict counts and trend.
+- `GET /v1/batches/:id` and `/v1/batches/:id/tasks/:taskId` - the task inspector data.
+- Session-auth routes behind these for the dashboard.
+
+**Deployment.** Railway builds `apps/api`, env `DATABASE_URL`, `BETTER_AUTH_SECRET`,
+`BETTER_AUTH_URL`. Vercel builds `apps/web`, env `NEXT_PUBLIC_API_URL`. Drizzle migrations
+run on API deploy against the Neon branch for the environment.
+
+**Order of build.** schema and migrations, then Better Auth wired to Neon, then
+`POST /v1/batches` with an API key, then the dashboard read paths, then the task inspector,
+then the marketing site. The 3D frontend is a parallel track with its own design pass.
 
 ### Phase 3: the review queue and contracts
 
