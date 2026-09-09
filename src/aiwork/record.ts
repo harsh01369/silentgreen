@@ -109,6 +109,11 @@ export function parseTaskRecords(text: string): ParseResult {
     }
   }
 
+  // A CSV export: not JSON, and the first row is a header naming columns we know.
+  if (!trimmed.startsWith('{') && looksLikeCsvHeader(trimmed)) {
+    return parseCsvRecords(trimmed);
+  }
+
   const lines = trimmed.split('\n');
   lines.forEach((line, i) => {
     const l = line.trim();
@@ -126,6 +131,85 @@ export function parseTaskRecords(text: string): ParseResult {
 
   return { records, issues };
 }
+
+/* ------------------------------------------------------------------- CSV --- */
+
+/** A minimal RFC 4180 reader: quoted fields, escaped quotes, newlines in quotes. */
+function readCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else quoted = false;
+      } else field += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ',') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else field += ch;
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c) => c.trim().length > 0));
+}
+
+const ALL_KEYS = new Set([...INPUT_KEYS, ...OUTPUT_KEYS, ...SOURCE_KEYS, ...ID_KEYS, ...TIME_KEYS]);
+
+function looksLikeCsvHeader(text: string): boolean {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? '';
+  if (!firstLine.includes(',')) return false;
+  const cols = readCsv(firstLine)[0] ?? [];
+  return cols.some((c) => ALL_KEYS.has(c.trim().toLowerCase())) && cols.some((c) => OUTPUT_KEYS.includes(c.trim().toLowerCase()));
+}
+
+function parseCsvRecords(text: string): ParseResult {
+  const rows = readCsv(text);
+  const issues: ParseIssue[] = [];
+  const records: TaskRecord[] = [];
+  const header = (rows[0] ?? []).map((h) => h.trim());
+
+  rows.slice(1).forEach((cells, i) => {
+    const obj: Record<string, unknown> = {};
+    header.forEach((h, c) => {
+      const v = cells[c];
+      if (v === undefined || v === '') return;
+      // A sources column can hold JSON, or values split by | or ;
+      if (SOURCE_KEYS.includes(h.toLowerCase())) {
+        try {
+          obj[h] = JSON.parse(v);
+          return;
+        } catch {
+          obj[h] = v.includes('|') ? v.split('|') : v.includes(';') ? v.split(';') : [v];
+          return;
+        }
+      }
+      obj[h] = v;
+    });
+    const r = toRecord(obj, i + 2, issues);
+    if (r) records.push(r);
+  });
+
+  return { records, issues };
+}
+
+/* ------------------------------------------------------------------------- */
 
 function toRecord(item: unknown, line: number, issues: ParseIssue[]): TaskRecord | undefined {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {

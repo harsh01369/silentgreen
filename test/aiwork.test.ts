@@ -19,6 +19,27 @@ describe('reading whatever the pipeline exported', () => {
     assert.equal(records.length, 2);
   });
 
+  test('a CSV export is read, with a header that names the columns', () => {
+    const csv = ['id,question,answer,sources', 't1,"What is owed?","£100.00 is owed.","invoice total 100.00"', 't2,q2,a2,'].join('\n');
+    const { records, issues } = parseTaskRecords(csv);
+    assert.equal(issues.length, 0);
+    assert.equal(records.length, 2);
+    assert.equal(records[0]!.output, '£100.00 is owed.');
+    assert.deepEqual(records[0]!.sources, ['invoice total 100.00']);
+  });
+
+  test('a CSV sources column split by a pipe becomes multiple documents', () => {
+    const csv = 'output,context\n"the answer","doc one|doc two|doc three"';
+    const { records } = parseTaskRecords(csv);
+    assert.deepEqual(records[0]!.sources, ['doc one', 'doc two', 'doc three']);
+  });
+
+  test('a CSV field with a comma inside quotes is one value', () => {
+    const csv = 'output,sources\n"the total is 1,234.00","the invoice says 1,234.00"';
+    const { records } = parseTaskRecords(csv);
+    assert.equal(records[0]!.output, 'the total is 1,234.00');
+  });
+
   test('other tools name these fields differently, and that is fine', () => {
     const { records } = parseTaskRecords(
       JSON.stringify({ trace_id: 'x1', prompt: 'what is owed?', completion: 'nothing', context: ['doc'] }),

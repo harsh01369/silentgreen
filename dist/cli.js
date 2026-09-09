@@ -2889,6 +2889,9 @@ function parseTaskRecords(text) {
       return { records, issues: [{ line: 1, reason: `The file starts with "[" but is not valid JSON: ${String(err)}` }] };
     }
   }
+  if (!trimmed.startsWith("{") && looksLikeCsvHeader(trimmed)) {
+    return parseCsvRecords(trimmed);
+  }
   const lines = trimmed.split("\n");
   lines.forEach((line, i) => {
     const l = line.trim();
@@ -2901,6 +2904,73 @@ function parseTaskRecords(text) {
       return;
     }
     const r = toRecord(parsed, i + 1, issues);
+    if (r) records.push(r);
+  });
+  return { records, issues };
+}
+function readCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else quoted = false;
+      } else field += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else field += ch;
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((c2) => c2.trim().length > 0));
+}
+var ALL_KEYS = /* @__PURE__ */ new Set([...INPUT_KEYS, ...OUTPUT_KEYS, ...SOURCE_KEYS, ...ID_KEYS, ...TIME_KEYS]);
+function looksLikeCsvHeader(text) {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  if (!firstLine.includes(",")) return false;
+  const cols = readCsv(firstLine)[0] ?? [];
+  return cols.some((c2) => ALL_KEYS.has(c2.trim().toLowerCase())) && cols.some((c2) => OUTPUT_KEYS.includes(c2.trim().toLowerCase()));
+}
+function parseCsvRecords(text) {
+  const rows = readCsv(text);
+  const issues = [];
+  const records = [];
+  const header = (rows[0] ?? []).map((h) => h.trim());
+  rows.slice(1).forEach((cells, i) => {
+    const obj = {};
+    header.forEach((h, c2) => {
+      const v = cells[c2];
+      if (v === void 0 || v === "") return;
+      if (SOURCE_KEYS.includes(h.toLowerCase())) {
+        try {
+          obj[h] = JSON.parse(v);
+          return;
+        } catch {
+          obj[h] = v.includes("|") ? v.split("|") : v.includes(";") ? v.split(";") : [v];
+          return;
+        }
+      }
+      obj[h] = v;
+    });
+    const r = toRecord(obj, i + 2, issues);
     if (r) records.push(r);
   });
   return { records, issues };

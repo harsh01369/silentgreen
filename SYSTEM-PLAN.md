@@ -407,7 +407,7 @@ real batches that neither the builder nor a fixture author wrote.
 - [in progress] Harden extraction: dates and quotations done; still to do are
   words-to-number, currency-code normalisation, fuzzy name matching.
 - [open] Real reporting from `check`, leading with the coverage-honesty sentence.
-- [done] Importers: JSONL, JSON array, and LangSmith and Langfuse trace shapes unpacked automatically. CSV still to do.
+- [done] Importers: JSONL, JSON array, CSV (RFC 4180, flexible column names), and LangSmith and Langfuse trace shapes unpacked automatically.
 - [done] GitHub Action (`action.yml`) that runs `check` over a path or glob and comments
   the result on the PR, failing the job when an answer is flagged. `check` now takes
   multiple paths and expands `*`, `?` and `**`.

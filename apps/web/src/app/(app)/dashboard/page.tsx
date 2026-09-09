@@ -224,15 +224,37 @@ function ProjectCard({ project, orgId }: { project: Project; orgId: string }) {
 
       <div className="mt-5 grid grid-cols-4 gap-3 text-center">
         <Stat label="tasks" value={t?.tasks ?? 0} tone="text-paper" />
-        <Stat label="clean" value={t?.clean ?? 0} tone="text-patina-bright" />
-        <Stat label="problems" value={t?.problematic ?? 0} tone="text-amber" />
+        <Stat label="proven" value={t?.clean ?? 0} tone="text-patina-bright" />
+        <Stat label="violated" value={t?.problematic ?? 0} tone="text-amber" />
         <Stat label="unproven" value={t?.inconclusive ?? 0} tone="text-slate-verdict" />
       </div>
+
+      {summary && summary.batches.length > 0 && (
+        <ul className="mt-4 divide-y divide-line rounded-lg border border-line">
+          {summary.batches.slice(0, 5).map((b) => (
+            <li key={b.id}>
+              <Link
+                href={`/dashboard/batch/${b.id}`}
+                className="flex items-center justify-between px-3 py-2 text-xs transition-colors hover:bg-paper/5"
+              >
+                <span className="font-mono text-paper-dim">
+                  {new Date(b.uploadedAt).toLocaleDateString()} &middot; {b.taskCount} tasks
+                </span>
+                <span className="flex gap-2 font-mono">
+                  <span className="text-patina-bright">{b.cleanCount}</span>
+                  <span className="text-amber">{b.problematic}</span>
+                  <span className="text-slate-verdict">{b.inconclusive}</span>
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <details className="mt-4">
         <summary className="cursor-pointer text-xs text-paper-dim">Push a batch</summary>
         <pre className="mt-2 overflow-x-auto rounded-lg bg-ink-sunken/70 p-3 font-mono text-xs text-paper-dim">
-{`curl -X POST ${process.env.NEXT_PUBLIC_API_URL}/v1/batches \\
+{`curl -X POST ${process.env.NEXT_PUBLIC_API_URL ?? 'https://api.silentgreen.dev'}/v1/batches \\
   -H "x-api-key: sg_..." \\
   -H "content-type: application/x-ndjson" \\
   --data-binary @tasks.jsonl`}

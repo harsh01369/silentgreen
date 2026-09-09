@@ -1174,5 +1174,5 @@ window.SG = {
     }
   ],
   "refusalMessage": "Say how you know that window was good, in a sentence someone could later check. \"Reconciled against the client's invoice export for March\" is an attestation. \"Looks fine\" is not, and it will be printed next to every green tick it produces.",
-  "generatedAt": "2026-09-09T19:57:18.617Z"
+  "generatedAt": "2026-09-09T20:52:08.955Z"
 };

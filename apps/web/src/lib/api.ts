@@ -36,3 +36,25 @@ export interface ProjectSummary {
   totals: { tasks: number; clean: number; problematic: number; inconclusive: number };
   batches: BatchRow[];
 }
+
+export interface ProblemRow {
+  id: string;
+  kind: string;
+  summary: string;
+  evidenceRedacted: string;
+}
+
+export interface TaskResultRow {
+  id: string;
+  taskId: string;
+  verdict: 'clean' | 'problem' | 'inconclusive';
+  atomsChecked: number;
+  inconclusiveReason: string | null;
+  at: string | null;
+  problems: ProblemRow[];
+}
+
+export interface BatchDetail {
+  batch: BatchRow & { projectId: string; unreadableLines: number };
+  tasks: TaskResultRow[];
+}
