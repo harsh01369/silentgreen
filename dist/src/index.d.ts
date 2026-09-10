@@ -8,10 +8,13 @@
  */
 export { parseTaskRecords, groundingSourcesFor, type TaskRecord, type ParseResult, type ParseIssue, } from './aiwork/record';
 export { extractTrace, type TraceExtract } from './aiwork/adapters';
+export type { ActionRecord } from './aiwork/record';
+export { createRecorder, type Recorder, type RecorderOptions, type Sink, type TaskContext, type TaskSeed, } from './record/recorder';
 export { checkBatch, looksDeferred, type TaskResult, type TaskProblem, type TaskProblemKind, type BatchSummary, type CheckOptions, } from './aiwork/check';
 export { checkGrounding, extractAtoms, type GroundingResult, type Atom, type AtomKind } from './verify/grounding';
 export { checkConsistency, type Inconsistency, type InconsistencyKind } from './verify/consistency';
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
+export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
 export { demoTasks } from './aiwork/demo';
 export { scoreBatch, gate, DEFAULT_GATE, type Scoreboard, type LabelledBatch, type TaskLabel, type GateThresholds, type GateResult, } from './eval/score';
 export { builtinBatches } from './eval/corpus';

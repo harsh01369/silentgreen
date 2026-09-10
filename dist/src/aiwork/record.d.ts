@@ -12,6 +12,21 @@
  * because it says `completion` rather than `output` would be a pointless way to
  * lose a user in the first thirty seconds.
  */
+/**
+ * Something the pipeline did in the world, not just described: an email sent, a
+ * row written, a ticket closed. A contract can require that an action the answer
+ * claims ("I have emailed you the invoice") actually appears here.
+ */
+export interface ActionRecord {
+    /** A dotted verb: `email.sent`, `db.write`, `ticket.closed`, `refund.issued`. */
+    readonly kind: string;
+    /** Who or what it acted on: a recipient, a table, a ticket id. */
+    readonly target?: string;
+    readonly at?: string;
+    readonly payload?: unknown;
+    /** `ok`, `error`, or a status string the caller chose. */
+    readonly result?: string;
+}
 export interface TaskRecord {
     readonly id: string;
     readonly at?: string;
@@ -21,6 +36,8 @@ export interface TaskRecord {
     readonly sources: readonly string[];
     /** What came back. */
     readonly output: string;
+    /** What the pipeline actually did, if it was recorded. */
+    readonly actions?: readonly ActionRecord[];
     readonly meta?: Readonly<Record<string, unknown>>;
 }
 export interface ParseIssue {

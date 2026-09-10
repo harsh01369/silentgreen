@@ -20,6 +20,7 @@
  * material, or the other answers in the batch.
  */
 import { type GroundingOptions } from '../verify/grounding';
+import { type BatchSignal } from '../verify/distribution';
 import { type TaskRecord } from './record';
 export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated' | 'inconsistent' | 'malformed';
 export interface TaskProblem {
@@ -48,6 +49,11 @@ export interface BatchSummary {
     readonly headline: string;
     /** Stated plainly, because coverage is not the same as correctness. */
     readonly caveat: string;
+    /**
+     * Batch-level observations: rates and shapes that no single answer reveals.
+     * Never counted as a per-task problem and never fails a job on their own.
+     */
+    readonly signals: readonly BatchSignal[];
 }
 export declare function looksDeferred(output: string): {
     deferred: boolean;

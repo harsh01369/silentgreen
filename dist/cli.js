@@ -350,20 +350,20 @@ function inferCadence(runs) {
   const excludedStructuralGaps = allIntervals.length - workingIntervals.length;
   const basis = workingIntervals.length >= 3 ? workingIntervals : allIntervals;
   const sorted = [...basis].sort((a, b) => a - b);
-  const median = quantile(sorted, 0.5);
+  const median2 = quantile(sorted, 0.5);
   const p95 = quantile(sorted, 0.95);
-  const spread = median > 0 ? p95 / median : Infinity;
+  const spread = median2 > 0 ? p95 / median2 : Infinity;
   let confidence;
   let reasoning;
   if (sorted.length >= 20 && spread <= 1.5) {
     confidence = "high";
-    reasoning = `${sorted.length} intervals, tightly clustered around ${humanise(median)}. This looks like a schedule, and a missed run should be obvious quickly.`;
+    reasoning = `${sorted.length} intervals, tightly clustered around ${humanise(median2)}. This looks like a schedule, and a missed run should be obvious quickly.`;
   } else if (sorted.length >= 10 && spread <= 4) {
     confidence = "moderate";
-    reasoning = `${sorted.length} intervals with a typical gap of ${humanise(median)} and a long tail out to ${humanise(p95)}. Usable, but expect the occasional legitimate late run.`;
+    reasoning = `${sorted.length} intervals with a typical gap of ${humanise(median2)} and a long tail out to ${humanise(p95)}. Usable, but expect the occasional legitimate late run.`;
   } else {
     confidence = "low";
-    reasoning = `Only ${sorted.length} intervals, ranging widely (typical ${humanise(median)}, tail ${humanise(p95)}). This is probably event driven rather than scheduled, so an absence alarm here will be noisy. Consider a volume expectation over a day instead.`;
+    reasoning = `Only ${sorted.length} intervals, ranging widely (typical ${humanise(median2)}, tail ${humanise(p95)}). This is probably event driven rather than scheduled, so an absence alarm here will be noisy. Consider a volume expectation over a day instead.`;
   }
   if (weekdaysOnly) {
     reasoning += " No run has ever started at a weekend, so weekend gaps are excluded from the rhythm rather than treated as incidents.";
@@ -375,7 +375,7 @@ function inferCadence(runs) {
     reasoning += ` ${excludedStructuralGaps} gap(s) that crossed non-working time were excluded from the calculation, which is what keeps the expectation tight enough to be useful.`;
   }
   return {
-    medianIntervalSeconds: Math.round(median),
+    medianIntervalSeconds: Math.round(median2),
     p95IntervalSeconds: Math.round(p95),
     weekdaysOnly,
     activeHours,
@@ -809,8 +809,8 @@ function headlineFor(a) {
     const caveat = a.counts.unproven > 0 ? ` ${a.counts.unproven} checks could not be established and are listed below.` : "";
     return `${a.runs} runs examined, ${a.counts.proven} checks held.${caveat}`;
   }
-  const pct = Math.round(a.runsWithViolations / Math.max(1, a.runs) * 100);
-  return `${a.runsWithViolations} of ${a.runs} runs (${pct}%) produced output that violated a confirmed expectation, while the platform recorded ${a.platformReportedFailures} failures.`;
+  const pct2 = Math.round(a.runsWithViolations / Math.max(1, a.runs) * 100);
+  return `${a.runsWithViolations} of ${a.runs} runs (${pct2}%) produced output that violated a confirmed expectation, while the platform recorded ${a.platformReportedFailures} failures.`;
 }
 
 // src/demo/scenario.ts
@@ -2873,6 +2873,30 @@ function collectSources(obj) {
   }
   return out;
 }
+var ACTION_KEYS = ["actions", "tool_calls", "toolCalls", "tools_used", "effects", "side_effects"];
+function collectActions(obj) {
+  const out = [];
+  for (const k of ACTION_KEYS) {
+    const v = obj[k];
+    if (!Array.isArray(v)) continue;
+    for (const item of v) {
+      if (!item || typeof item !== "object") continue;
+      const rec = item;
+      const kind = typeof rec.kind === "string" && rec.kind || typeof rec.type === "string" && rec.type || typeof rec.name === "string" && rec.name || typeof rec.tool === "string" && rec.tool || typeof rec.function === "string" && rec.function;
+      if (!kind) continue;
+      const target = typeof rec.target === "string" && rec.target || typeof rec.to === "string" && rec.to || typeof rec.recipient === "string" && rec.recipient || typeof rec.arguments === "string" && rec.arguments || void 0;
+      const result = typeof rec.result === "string" && rec.result || typeof rec.status === "string" && rec.status || (rec.ok === true ? "ok" : rec.ok === false ? "error" : void 0) || void 0;
+      out.push({
+        kind,
+        ...target ? { target } : {},
+        ...result ? { result } : {},
+        ...rec.payload !== void 0 ? { payload: rec.payload } : {},
+        ...typeof rec.at === "string" ? { at: rec.at } : {}
+      });
+    }
+  }
+  return out;
+}
 function parseTaskRecords(text) {
   const records = [];
   const issues = [];
@@ -2995,7 +3019,8 @@ function toRecord(item, line, issues) {
   const sources = generic.length > 0 ? generic : trace.sources ?? [];
   const id = firstString(obj, ID_KEYS) ?? trace.id ?? `line-${line}`;
   const at = firstString(obj, TIME_KEYS) ?? trace.at;
-  return { id, at, input, sources, output, meta: obj };
+  const actions = collectActions(obj);
+  return { id, at, input, sources, output, ...actions.length > 0 ? { actions } : {}, meta: obj };
 }
 function groundingSourcesFor(record) {
   if (record.sources.length > 0) return { sources: record.sources, basis: "sources" };
@@ -3420,16 +3445,16 @@ function checkRestatedValue(text, out) {
 }
 function checkPercentage(text, out) {
   const sub = labelled(text, SUBTOTAL_LABELS);
-  const pct = /\b(\d{1,2}(?:\.\d+)?)\s?%/.exec(text);
+  const pct2 = /\b(\d{1,2}(?:\.\d+)?)\s?%/.exec(text);
   const tax = labelled(text, TAX_LABELS);
-  if (!sub || !pct || !tax || !pct[1]) return;
-  const rate = Number(pct[1]) / 100;
-  const expected = sub.value * rate;
+  if (!sub || !pct2 || !tax || !pct2[1]) return;
+  const rate2 = Number(pct2[1]) / 100;
+  const expected = sub.value * rate2;
   if (Math.abs(expected - tax.value) > 0.5 + sub.value * 1e-3) {
     out.push({
       kind: "percentage",
-      summary: `Tax is stated as ${pct[1]}% but the amount does not match: ${pct[1]}% of ${sub.value.toFixed(2)} is ${expected.toFixed(2)}, not ${tax.value.toFixed(2)}.`,
-      evidence: `${sub.raw}; rate ${pct[1]}%; ${tax.raw}`
+      summary: `Tax is stated as ${pct2[1]}% but the amount does not match: ${pct2[1]}% of ${sub.value.toFixed(2)} is ${expected.toFixed(2)}, not ${tax.value.toFixed(2)}.`,
+      evidence: `${sub.raw}; rate ${pct2[1]}%; ${tax.raw}`
     });
   }
 }
@@ -3554,6 +3579,108 @@ function checkConformance(output, input = "") {
   return out;
 }
 
+// src/verify/distribution.ts
+var MIN_BATCH = 8;
+function fingerprint(s) {
+  return s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 400);
+}
+function median(xs) {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function mad(xs, mid) {
+  if (xs.length === 0) return 0;
+  return median(xs.map((x) => Math.abs(x - mid)));
+}
+function rate(count, total) {
+  return total > 0 ? count / total : 0;
+}
+function pct(x) {
+  return `${Math.round(x * 100)}%`;
+}
+function checkDistribution(tasks) {
+  const out = [];
+  const n = tasks.length;
+  if (n < MIN_BATCH) return out;
+  const deferred = tasks.filter((t) => t.deferred);
+  const refused = tasks.filter((t) => t.refused);
+  const empty = tasks.filter((t) => t.empty);
+  if (deferred.length >= 3 && rate(deferred.length, n) >= 0.25) {
+    out.push({
+      kind: "deferral-rate",
+      severity: "concern",
+      summary: `${deferred.length} of ${n} answers (${pct(rate(deferred.length, n))}) hand the task back to a human. Each one counts as a completed task, so a high resolution rate here means very little.`,
+      sampleTaskIds: deferred.slice(0, 5).map((t) => t.id)
+    });
+  }
+  if (refused.length >= 3 && rate(refused.length, n) >= 0.2) {
+    out.push({
+      kind: "refusal-rate",
+      severity: "concern",
+      summary: `${refused.length} of ${n} answers (${pct(rate(refused.length, n))}) are refusals carried downstream as content. That points at a prompt, a permission, or an upstream data problem rather than at any one answer.`,
+      sampleTaskIds: refused.slice(0, 5).map((t) => t.id)
+    });
+  }
+  if (empty.length >= 2 && rate(empty.length, n) >= 0.15) {
+    out.push({
+      kind: "empty-rate",
+      severity: "concern",
+      summary: `${empty.length} of ${n} answers (${pct(rate(empty.length, n))}) are empty or a bare null. The pipeline is recording a result where there is none.`,
+      sampleTaskIds: empty.slice(0, 5).map((t) => t.id)
+    });
+  }
+  const clusters = /* @__PURE__ */ new Map();
+  for (const t of tasks) {
+    if (t.empty) continue;
+    const fp = fingerprint(t.output);
+    let ids = clusters.get(fp);
+    if (!ids) {
+      ids = [];
+      clusters.set(fp, ids);
+    }
+    ids.push(t.id);
+  }
+  let biggest = [];
+  for (const ids of clusters.values()) if (ids.length > biggest.length) biggest = ids;
+  if (biggest.length >= 5 && rate(biggest.length, n) >= 0.4) {
+    out.push({
+      kind: "collapse",
+      severity: "concern",
+      summary: `${biggest.length} of ${n} answers (${pct(rate(biggest.length, n))}) are the same response to different inputs. A pipeline that has stopped reading its input looks exactly like this.`,
+      sampleTaskIds: biggest.slice(0, 5)
+    });
+  }
+  const groundedTasks = tasks.filter((t) => t.grounded);
+  if (groundedTasks.length >= MIN_BATCH) {
+    const barren = groundedTasks.filter((t) => t.atomsChecked === 0);
+    if (rate(barren.length, groundedTasks.length) >= 0.7) {
+      out.push({
+        kind: "atom-drought",
+        severity: "notice",
+        summary: `${barren.length} of ${groundedTasks.length} answers contain no figure, date, identifier or name to check against the source. Groundedness has very little to work with in this batch, so a clean result is a weak signal here.`,
+        sampleTaskIds: barren.slice(0, 5).map((t) => t.id)
+      });
+    }
+  }
+  const lengths = tasks.filter((t) => !t.empty).map((t) => t.output.length);
+  if (lengths.length >= MIN_BATCH) {
+    const mid = median(lengths);
+    const spread = mad(lengths, mid) * 1.4826 || 1;
+    const outliers = tasks.filter((t) => !t.empty).map((t) => ({ id: t.id, z: (t.output.length - mid) / spread })).filter((t) => Math.abs(t.z) >= 6);
+    if (outliers.length > 0 && outliers.length <= Math.max(2, Math.floor(n * 0.1))) {
+      out.push({
+        kind: "length-outlier",
+        severity: "notice",
+        summary: `${outliers.length} answer(s) are far shorter or longer than the rest of the batch. That is often where a truncation, a dump of raw context, or a different code path shows up.`,
+        sampleTaskIds: outliers.slice(0, 5).map((t) => t.id)
+      });
+    }
+  }
+  return out;
+}
+
 // src/aiwork/check.ts
 var DEGENERATE_PATTERNS = [
   "empty-string",
@@ -3579,14 +3706,14 @@ function looksDeferred(output) {
   }
   return { deferred: false };
 }
-function fingerprint(s) {
+function fingerprint2(s) {
   return createHash3("sha256").update(s.toLowerCase().replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16);
 }
 function checkBatch(records, opts = {}) {
   const duplicateThreshold = opts.duplicateThreshold ?? 3;
   const counts = /* @__PURE__ */ new Map();
   for (const r of records) {
-    const fp = fingerprint(r.output);
+    const fp = fingerprint2(r.output);
     counts.set(fp, (counts.get(fp) ?? 0) + 1);
   }
   const results = [];
@@ -3598,10 +3725,13 @@ function checkBatch(records, opts = {}) {
     inconsistent: 0,
     malformed: 0
   };
+  const taskSignals = [];
   for (const record of records) {
     const problems = [];
+    let degenerateKind;
     for (const pattern of DEGENERATE_PATTERNS) {
       if (matchDegenerate(record.output, pattern)) {
+        degenerateKind = pattern;
         problems.push({
           kind: "degenerate",
           summary: `The answer ${describeDegenerate(pattern)}.`,
@@ -3618,7 +3748,7 @@ function checkBatch(records, opts = {}) {
         evidence: deferral.matched ?? record.output.slice(0, 200)
       });
     }
-    const dupCount = counts.get(fingerprint(record.output)) ?? 0;
+    const dupCount = counts.get(fingerprint2(record.output)) ?? 0;
     if (dupCount >= duplicateThreshold && record.output.trim().length > 0) {
       problems.push({
         kind: "duplicated",
@@ -3635,10 +3765,12 @@ function checkBatch(records, opts = {}) {
     let inconclusive2 = false;
     let inconclusiveReason;
     let atomsChecked = 0;
+    let groundingRan = false;
     if (!opts.skipGrounding) {
       const { sources, basis, note } = groundingSourcesFor(record);
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
+      groundingRan = basis !== "none";
       if (g.inconclusive) {
         inconclusive2 = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
@@ -3656,6 +3788,15 @@ function checkBatch(records, opts = {}) {
       }
     }
     for (const p of problems) byKind[p.kind] += 1;
+    taskSignals.push({
+      id: record.id,
+      output: record.output,
+      deferred: deferral.deferred,
+      refused: degenerateKind === "model-refusal",
+      empty: degenerateKind === "empty-string" || degenerateKind === "null-literal",
+      atomsChecked,
+      grounded: groundingRan
+    });
     results.push({
       id: record.id,
       at: record.at,
@@ -3665,11 +3806,12 @@ function checkBatch(records, opts = {}) {
       atomsChecked
     });
   }
+  const signals = checkDistribution(taskSignals);
   const problematic = results.filter((r) => r.problems.length > 0).length;
   const inconclusiveCount = results.filter((r) => r.inconclusive).length;
   const clean = results.length - problematic - inconclusiveCount;
-  const pct = results.length > 0 ? Math.round(problematic / results.length * 100) : 0;
-  const headline = problematic === 0 ? `${results.length} answers checked, none carrying a problem this can detect.` : `${problematic} of ${results.length} answers (${pct}%) contain something the pipeline reported as a success.`;
+  const pct2 = results.length > 0 ? Math.round(problematic / results.length * 100) : 0;
+  const headline = problematic === 0 ? `${results.length} answers checked, none carrying a problem this can detect.` : `${problematic} of ${results.length} answers (${pct2}%) contain something the pipeline reported as a success.`;
   return {
     results,
     summary: {
@@ -3679,6 +3821,7 @@ function checkBatch(records, opts = {}) {
       inconclusive: inconclusiveCount,
       byKind,
       headline,
+      signals,
       caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
     }
   };
@@ -4187,6 +4330,7 @@ try {
   process.loadEnvFile(".env");
 } catch {
 }
+var VERSION = "0.1.0";
 var ESC = String.fromCharCode(27);
 var C = {
   reset: ESC + "[0m",
@@ -4371,10 +4515,14 @@ function printFindings(result) {
 async function runCheck(paths, rest) {
   let records;
   let issues = [];
+  const jsonMode = rest.includes("--json");
+  const say = (s) => {
+    if (!jsonMode) console.log(s);
+  };
   const files = paths.filter((p) => p !== "--demo");
   if (files.length === 0) {
     records = demoTasks();
-    console.log(`
+    say(`
 ${c(C.bold, "silentgreen check")} ${c(C.dim, "worked example")}
 
 Twenty answers from a support agent with the invoice in front of it. Every one
@@ -4398,11 +4546,11 @@ No files matched: ${files.join(", ")}`);
     records = all;
     issues = allIssues;
     const where = expanded.length === 1 ? expanded[0] : `${expanded.length} files`;
-    console.log(`
+    say(`
 ${records.length} task(s) read from ${where}.`);
     if (issues.length > 0) {
-      console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
-      for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
+      say(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
+      for (const i of issues.slice(0, 5)) say(c(C.dim, `  line ${i.line}: ${i.reason}`));
     }
     if (records.length === 0) {
       console.error(`
@@ -4419,6 +4567,33 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
   const { results, summary } = checkBatch(records, {
     skipGrounding: rest.includes("--no-grounding")
   });
+  if (rest.includes("--json")) {
+    const payload = {
+      tool: "silentgreen",
+      version: VERSION,
+      headline: summary.headline,
+      counts: {
+        total: summary.total,
+        clean: summary.clean,
+        problems: summary.problematic,
+        inconclusive: summary.inconclusive
+      },
+      byKind: summary.byKind,
+      signals: summary.signals,
+      unreadableLines: issues.length,
+      tasks: results.map((r) => ({
+        id: r.id,
+        verdict: r.problems.length > 0 ? "violated" : r.inconclusive ? "unproven" : "proven",
+        atomsChecked: r.atomsChecked,
+        inconclusiveReason: r.inconclusiveReason,
+        problems: r.problems
+      })),
+      caveat: summary.caveat
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+    if (summary.problematic > 0) process.exitCode = 1;
+    return;
+  }
   rule("What was found");
   console.log(`  ${c(C.bold, summary.headline)}
 `);
@@ -4451,6 +4626,15 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     }
     if (bad.length > 12) console.log(c(C.dim, `  ...and ${bad.length - 12} more.
 `));
+  }
+  if (summary.signals.length > 0) {
+    rule("Across the batch");
+    for (const s of summary.signals) {
+      const tag = s.severity === "concern" ? c(C.yellow, "!") : c(C.dim, "-");
+      console.log(`  ${tag} ${s.summary}`);
+      if (s.sampleTaskIds.length > 0) console.log(c(C.dim, `    e.g. ${s.sampleTaskIds.join(", ")}`));
+      console.log("");
+    }
   }
   rule("What this did not check");
   console.log(`  ${summary.caveat}`);

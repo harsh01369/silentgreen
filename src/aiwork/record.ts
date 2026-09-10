@@ -15,6 +15,22 @@
 
 import { extractTrace } from './adapters';
 
+/**
+ * Something the pipeline did in the world, not just described: an email sent, a
+ * row written, a ticket closed. A contract can require that an action the answer
+ * claims ("I have emailed you the invoice") actually appears here.
+ */
+export interface ActionRecord {
+  /** A dotted verb: `email.sent`, `db.write`, `ticket.closed`, `refund.issued`. */
+  readonly kind: string;
+  /** Who or what it acted on: a recipient, a table, a ticket id. */
+  readonly target?: string;
+  readonly at?: string;
+  readonly payload?: unknown;
+  /** `ok`, `error`, or a status string the caller chose. */
+  readonly result?: string;
+}
+
 export interface TaskRecord {
   readonly id: string;
   readonly at?: string;
@@ -24,6 +40,8 @@ export interface TaskRecord {
   readonly sources: readonly string[];
   /** What came back. */
   readonly output: string;
+  /** What the pipeline actually did, if it was recorded. */
+  readonly actions?: readonly ActionRecord[];
   readonly meta?: Readonly<Record<string, unknown>>;
 }
 
@@ -79,6 +97,47 @@ function collectSources(obj: Record<string, unknown>): readonly string[] {
           }
         }
       }
+    }
+  }
+  return out;
+}
+
+const ACTION_KEYS = ['actions', 'tool_calls', 'toolCalls', 'tools_used', 'effects', 'side_effects'];
+
+/** Actions in the shapes an agent framework tends to log them. */
+function collectActions(obj: Record<string, unknown>): ActionRecord[] {
+  const out: ActionRecord[] = [];
+  for (const k of ACTION_KEYS) {
+    const v = obj[k];
+    if (!Array.isArray(v)) continue;
+    for (const item of v) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as Record<string, unknown>;
+      const kind =
+        (typeof rec.kind === 'string' && rec.kind) ||
+        (typeof rec.type === 'string' && rec.type) ||
+        (typeof rec.name === 'string' && rec.name) ||
+        (typeof rec.tool === 'string' && rec.tool) ||
+        (typeof rec.function === 'string' && rec.function);
+      if (!kind) continue;
+      const target =
+        (typeof rec.target === 'string' && rec.target) ||
+        (typeof rec.to === 'string' && rec.to) ||
+        (typeof rec.recipient === 'string' && rec.recipient) ||
+        (typeof rec.arguments === 'string' && rec.arguments) ||
+        undefined;
+      const result =
+        (typeof rec.result === 'string' && rec.result) ||
+        (typeof rec.status === 'string' && rec.status) ||
+        (rec.ok === true ? 'ok' : rec.ok === false ? 'error' : undefined) ||
+        undefined;
+      out.push({
+        kind,
+        ...(target ? { target } : {}),
+        ...(result ? { result } : {}),
+        ...(rec.payload !== undefined ? { payload: rec.payload } : {}),
+        ...(typeof rec.at === 'string' ? { at: rec.at } : {}),
+      });
     }
   }
   return out;
@@ -236,8 +295,9 @@ function toRecord(item: unknown, line: number, issues: ParseIssue[]): TaskRecord
   const sources = generic.length > 0 ? generic : (trace.sources ?? []);
   const id = firstString(obj, ID_KEYS) ?? trace.id ?? `line-${line}`;
   const at = firstString(obj, TIME_KEYS) ?? trace.at;
+  const actions = collectActions(obj);
 
-  return { id, at, input, sources, output, meta: obj };
+  return { id, at, input, sources, output, ...(actions.length > 0 ? { actions } : {}), meta: obj };
 }
 
 /**

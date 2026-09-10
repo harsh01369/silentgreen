@@ -13,6 +13,10 @@
       "types": "./dist/src/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./record": {
+      "types": "./dist/src/record.d.ts",
+      "import": "./dist/record.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

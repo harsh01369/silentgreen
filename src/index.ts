@@ -16,6 +16,17 @@ export {
   type ParseIssue,
 } from './aiwork/record';
 export { extractTrace, type TraceExtract } from './aiwork/adapters';
+export type { ActionRecord } from './aiwork/record';
+
+// Recording AI work as it happens (also available as `silentgreen/record`).
+export {
+  createRecorder,
+  type Recorder,
+  type RecorderOptions,
+  type Sink,
+  type TaskContext,
+  type TaskSeed,
+} from './record/recorder';
 
 // The checks.
 export {
@@ -30,6 +41,7 @@ export {
 export { checkGrounding, extractAtoms, type GroundingResult, type Atom, type AtomKind } from './verify/grounding';
 export { checkConsistency, type Inconsistency, type InconsistencyKind } from './verify/consistency';
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
+export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
 
 // The worked example.
 export { demoTasks } from './aiwork/demo';

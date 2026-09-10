@@ -8,7 +8,7 @@ branding:
 
 inputs:
   file:
-    description: Path or glob of the JSONL/JSON export to check.
+    description: Path or glob of the JSONL/JSON/CSV export to check.
     required: true
   fail-on-problem:
     description: Fail the job when any answer is flagged. Set to "false" to comment only.
@@ -23,10 +23,25 @@ inputs:
     required: false
     default: 'false'
 
+outputs:
+  problems:
+    description: Number of answers flagged with a problem.
+    value: ${{ steps.run.outputs.problems }}
+  inconclusive:
+    description: Number of answers that could not be proven either way.
+    value: ${{ steps.run.outputs.inconclusive }}
+  clean:
+    description: Number of answers that carried no detectable problem.
+    value: ${{ steps.run.outputs.clean }}
+  report:
+    description: Path to the full JSON report.
+    value: ${{ steps.run.outputs.report }}
+
 runs:
   using: composite
   steps:
-    - shell: bash
+    - id: run
+      shell: bash
       env:
         SG_FILE: ${{ inputs.file }}
         SG_FAIL: ${{ inputs.fail-on-problem }}
@@ -36,30 +51,66 @@ runs:
       run: |
         set -euo pipefail
 
-        args=("$SG_FILE")
+        args=("$SG_FILE" --json)
         [ "$SG_NOGROUND" = "true" ] && args+=(--no-grounding)
 
+        report="$RUNNER_TEMP/silentgreen-report.json"
         set +e
-        out="$(npx --yes github:harsh01369/silentgreen check "${args[@]}" 2>&1)"
-        code=$?
+        npx --yes github:harsh01369/silentgreen check "${args[@]}" > "$report"
         set -e
 
-        echo "$out"
+        if ! jq -e . "$report" > /dev/null 2>&1; then
+          echo "::error::silentgreen produced no readable report"
+          cat "$report" || true
+          exit 1
+        fi
 
-        if [ "$SG_COMMENT" = "true" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && \
-           [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-          {
-            echo '### silentgreen check'
+        problems=$(jq -r '.counts.problems' "$report")
+        inconclusive=$(jq -r '.counts.inconclusive' "$report")
+        clean=$(jq -r '.counts.clean' "$report")
+        total=$(jq -r '.counts.total' "$report")
+
+        {
+          echo "problems=$problems"
+          echo "inconclusive=$inconclusive"
+          echo "clean=$clean"
+          echo "report=$report"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### silentgreen check"
+          echo
+          jq -r '.headline' "$report"
+          echo
+          echo "| verdict | count |"
+          echo "| --- | --- |"
+          echo "| proven | $clean |"
+          echo "| violated | $problems |"
+          echo "| unproven | $inconclusive |"
+          echo
+          if [ "$problems" -gt 0 ]; then
+            echo "**Flagged**"
             echo
-            echo '```'
-            echo "$out" | sed -e 's/\x1b\[[0-9;]*m//g'
-            echo '```'
-          } > "$RUNNER_TEMP/sg-comment.md"
+            jq -r '.tasks[] | select(.verdict == "violated") | "- `" + .id + "` — " + (.problems[0].summary // "flagged")' "$report" | head -20
+            echo
+          fi
+          jq -r '.signals[]? | "- _across the batch:_ " + .summary' "$report"
+          echo
+          jq -r '"> " + .caveat' "$report"
+        } > "$RUNNER_TEMP/sg-comment.md"
+
+        cat "$RUNNER_TEMP/sg-comment.md"
+        {
+          echo "## silentgreen"
+          cat "$RUNNER_TEMP/sg-comment.md"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$SG_COMMENT" = "true" ] && [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
           gh pr comment "${{ github.event.pull_request.number }}" \
             --body-file "$RUNNER_TEMP/sg-comment.md" || echo "could not post comment"
         fi
 
-        if [ "$SG_FAIL" = "true" ] && [ "$code" -ne 0 ]; then
-          echo "::error::silentgreen flagged one or more answers"
-          exit "$code"
+        if [ "$SG_FAIL" = "true" ] && [ "$problems" -gt 0 ]; then
+          echo "::error::silentgreen flagged $problems of $total answers"
+          exit 1
         fi

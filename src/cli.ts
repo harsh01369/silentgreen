@@ -40,6 +40,8 @@ try {
   // Absent .env is fine. The demo needs no credentials at all.
 }
 
+const VERSION = '0.1.0';
+
 const ESC = String.fromCharCode(27);
 const C = {
   reset: ESC + '[0m',
@@ -258,11 +260,15 @@ async function runCheck(paths: readonly string[], rest: readonly string[]): Prom
   let records: readonly TaskRecord[];
   let issues: readonly { line: number; reason: string }[] = [];
 
+  const jsonMode = rest.includes('--json');
+  const say = (s: string) => {
+    if (!jsonMode) console.log(s);
+  };
   const files = paths.filter((p) => p !== '--demo');
 
   if (files.length === 0) {
     records = demoTasks();
-    console.log(`
+    say(`
 ${c(C.bold, 'silentgreen check')} ${c(C.dim, 'worked example')}
 
 Twenty answers from a support agent with the invoice in front of it. Every one
@@ -287,10 +293,10 @@ was recorded as a completed task, and every one reads as helpful.
     issues = allIssues;
 
     const where = expanded.length === 1 ? expanded[0] : `${expanded.length} files`;
-    console.log(`\n${records.length} task(s) read from ${where}.`);
+    say(`\n${records.length} task(s) read from ${where}.`);
     if (issues.length > 0) {
-      console.log(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
-      for (const i of issues.slice(0, 5)) console.log(c(C.dim, `  line ${i.line}: ${i.reason}`));
+      say(c(C.yellow, `${issues.length} line(s) could not be read, and are not included in any count below:`));
+      for (const i of issues.slice(0, 5)) say(c(C.dim, `  line ${i.line}: ${i.reason}`));
     }
     if (records.length === 0) {
       console.error(`
@@ -308,6 +314,34 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
   const { results, summary } = checkBatch(records, {
     skipGrounding: rest.includes('--no-grounding'),
   });
+
+  if (rest.includes('--json')) {
+    const payload = {
+      tool: 'silentgreen',
+      version: VERSION,
+      headline: summary.headline,
+      counts: {
+        total: summary.total,
+        clean: summary.clean,
+        problems: summary.problematic,
+        inconclusive: summary.inconclusive,
+      },
+      byKind: summary.byKind,
+      signals: summary.signals,
+      unreadableLines: issues.length,
+      tasks: results.map((r) => ({
+        id: r.id,
+        verdict: r.problems.length > 0 ? 'violated' : r.inconclusive ? 'unproven' : 'proven',
+        atomsChecked: r.atomsChecked,
+        inconclusiveReason: r.inconclusiveReason,
+        problems: r.problems,
+      })),
+      caveat: summary.caveat,
+    };
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    if (summary.problematic > 0) process.exitCode = 1;
+    return;
+  }
 
   rule('What was found');
   console.log(`  ${c(C.bold, summary.headline)}\n`);
@@ -341,6 +375,16 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
       console.log('');
     }
     if (bad.length > 12) console.log(c(C.dim, `  ...and ${bad.length - 12} more.\n`));
+  }
+
+  if (summary.signals.length > 0) {
+    rule('Across the batch');
+    for (const s of summary.signals) {
+      const tag = s.severity === 'concern' ? c(C.yellow, '!') : c(C.dim, '-');
+      console.log(`  ${tag} ${s.summary}`);
+      if (s.sampleTaskIds.length > 0) console.log(c(C.dim, `    e.g. ${s.sampleTaskIds.join(', ')}`));
+      console.log('');
+    }
   }
 
   rule('What this did not check');

@@ -35,3 +35,10 @@ await build({
   entryPoints: ['src/index.ts'],
   outfile: 'dist/index.js',
 });
+
+// The SDK recorder, as an ergonomic subpath: `silentgreen/record`.
+await build({
+  ...common,
+  entryPoints: ['src/record.ts'],
+  outfile: 'dist/record.js',
+});

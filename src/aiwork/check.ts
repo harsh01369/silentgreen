@@ -25,6 +25,7 @@ import { checkGrounding, type GroundingOptions, type UngroundedAtom } from '../v
 import { matchDegenerate, describeDegenerate } from '../verify/assert';
 import { checkConsistency } from '../verify/consistency';
 import { checkConformance } from '../verify/conformance';
+import { checkDistribution, type BatchSignal, type TaskSignal } from '../verify/distribution';
 import type { DegeneratePattern } from '../contract/types';
 import { groundingSourcesFor, type TaskRecord } from './record';
 
@@ -64,6 +65,11 @@ export interface BatchSummary {
   readonly headline: string;
   /** Stated plainly, because coverage is not the same as correctness. */
   readonly caveat: string;
+  /**
+   * Batch-level observations: rates and shapes that no single answer reveals.
+   * Never counted as a per-task problem and never fails a job on their own.
+   */
+  readonly signals: readonly BatchSignal[];
 }
 
 const DEGENERATE_PATTERNS: readonly DegeneratePattern[] = [
@@ -142,11 +148,15 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
     malformed: 0,
   };
 
+  const taskSignals: TaskSignal[] = [];
+
   for (const record of records) {
     const problems: TaskProblem[] = [];
 
+    let degenerateKind: DegeneratePattern | undefined;
     for (const pattern of DEGENERATE_PATTERNS) {
       if (matchDegenerate(record.output, pattern)) {
+        degenerateKind = pattern;
         problems.push({
           kind: 'degenerate',
           summary: `The answer ${describeDegenerate(pattern)}.`,
@@ -186,11 +196,13 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
     let inconclusive = false;
     let inconclusiveReason: string | undefined;
     let atomsChecked = 0;
+    let groundingRan = false;
 
     if (!opts.skipGrounding) {
       const { sources, basis, note } = groundingSourcesFor(record);
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
+      groundingRan = basis !== 'none';
       if (g.inconclusive) {
         inconclusive = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
@@ -212,6 +224,16 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
 
     for (const p of problems) byKind[p.kind] += 1;
 
+    taskSignals.push({
+      id: record.id,
+      output: record.output,
+      deferred: deferral.deferred,
+      refused: degenerateKind === 'model-refusal',
+      empty: degenerateKind === 'empty-string' || degenerateKind === 'null-literal',
+      atomsChecked,
+      grounded: groundingRan,
+    });
+
     results.push({
       id: record.id,
       at: record.at,
@@ -221,6 +243,8 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
       atomsChecked,
     });
   }
+
+  const signals = checkDistribution(taskSignals);
 
   const problematic = results.filter((r) => r.problems.length > 0).length;
   const inconclusiveCount = results.filter((r) => r.inconclusive).length;
@@ -241,6 +265,7 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
       inconclusive: inconclusiveCount,
       byKind,
       headline,
+      signals,
       caveat:
         'This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.',
     },

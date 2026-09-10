@@ -147,6 +147,30 @@ function collectSources(obj) {
   }
   return out;
 }
+var ACTION_KEYS = ["actions", "tool_calls", "toolCalls", "tools_used", "effects", "side_effects"];
+function collectActions(obj) {
+  const out = [];
+  for (const k of ACTION_KEYS) {
+    const v = obj[k];
+    if (!Array.isArray(v)) continue;
+    for (const item of v) {
+      if (!item || typeof item !== "object") continue;
+      const rec = item;
+      const kind = typeof rec.kind === "string" && rec.kind || typeof rec.type === "string" && rec.type || typeof rec.name === "string" && rec.name || typeof rec.tool === "string" && rec.tool || typeof rec.function === "string" && rec.function;
+      if (!kind) continue;
+      const target = typeof rec.target === "string" && rec.target || typeof rec.to === "string" && rec.to || typeof rec.recipient === "string" && rec.recipient || typeof rec.arguments === "string" && rec.arguments || void 0;
+      const result = typeof rec.result === "string" && rec.result || typeof rec.status === "string" && rec.status || (rec.ok === true ? "ok" : rec.ok === false ? "error" : void 0) || void 0;
+      out.push({
+        kind,
+        ...target ? { target } : {},
+        ...result ? { result } : {},
+        ...rec.payload !== void 0 ? { payload: rec.payload } : {},
+        ...typeof rec.at === "string" ? { at: rec.at } : {}
+      });
+    }
+  }
+  return out;
+}
 function parseTaskRecords(text) {
   const records = [];
   const issues = [];
@@ -269,7 +293,8 @@ function toRecord(item, line, issues) {
   const sources = generic.length > 0 ? generic : trace.sources ?? [];
   const id = firstString(obj, ID_KEYS) ?? trace.id ?? `line-${line}`;
   const at = firstString(obj, TIME_KEYS) ?? trace.at;
-  return { id, at, input, sources, output, meta: obj };
+  const actions = collectActions(obj);
+  return { id, at, input, sources, output, ...actions.length > 0 ? { actions } : {}, meta: obj };
 }
 function groundingSourcesFor(record) {
   if (record.sources.length > 0) return { sources: record.sources, basis: "sources" };
@@ -282,6 +307,9 @@ function groundingSourcesFor(record) {
   }
   return { sources: [], basis: "none", note: "Neither sources nor a prompt were recorded, so nothing could be checked." };
 }
+
+// src/record/recorder.ts
+import { appendFileSync } from "node:fs";
 
 // src/aiwork/check.ts
 import { createHash } from "node:crypto";
@@ -758,16 +786,16 @@ function checkRestatedValue(text, out) {
 }
 function checkPercentage(text, out) {
   const sub = labelled(text, SUBTOTAL_LABELS);
-  const pct = /\b(\d{1,2}(?:\.\d+)?)\s?%/.exec(text);
+  const pct2 = /\b(\d{1,2}(?:\.\d+)?)\s?%/.exec(text);
   const tax = labelled(text, TAX_LABELS);
-  if (!sub || !pct || !tax || !pct[1]) return;
-  const rate = Number(pct[1]) / 100;
-  const expected = sub.value * rate;
+  if (!sub || !pct2 || !tax || !pct2[1]) return;
+  const rate2 = Number(pct2[1]) / 100;
+  const expected = sub.value * rate2;
   if (Math.abs(expected - tax.value) > 0.5 + sub.value * 1e-3) {
     out.push({
       kind: "percentage",
-      summary: `Tax is stated as ${pct[1]}% but the amount does not match: ${pct[1]}% of ${sub.value.toFixed(2)} is ${expected.toFixed(2)}, not ${tax.value.toFixed(2)}.`,
-      evidence: `${sub.raw}; rate ${pct[1]}%; ${tax.raw}`
+      summary: `Tax is stated as ${pct2[1]}% but the amount does not match: ${pct2[1]}% of ${sub.value.toFixed(2)} is ${expected.toFixed(2)}, not ${tax.value.toFixed(2)}.`,
+      evidence: `${sub.raw}; rate ${pct2[1]}%; ${tax.raw}`
     });
   }
 }
@@ -892,6 +920,108 @@ function checkConformance(output, input = "") {
   return out;
 }
 
+// src/verify/distribution.ts
+var MIN_BATCH = 8;
+function fingerprint(s) {
+  return s.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 400);
+}
+function median(xs) {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function mad(xs, mid) {
+  if (xs.length === 0) return 0;
+  return median(xs.map((x) => Math.abs(x - mid)));
+}
+function rate(count, total) {
+  return total > 0 ? count / total : 0;
+}
+function pct(x) {
+  return `${Math.round(x * 100)}%`;
+}
+function checkDistribution(tasks) {
+  const out = [];
+  const n = tasks.length;
+  if (n < MIN_BATCH) return out;
+  const deferred = tasks.filter((t) => t.deferred);
+  const refused = tasks.filter((t) => t.refused);
+  const empty = tasks.filter((t) => t.empty);
+  if (deferred.length >= 3 && rate(deferred.length, n) >= 0.25) {
+    out.push({
+      kind: "deferral-rate",
+      severity: "concern",
+      summary: `${deferred.length} of ${n} answers (${pct(rate(deferred.length, n))}) hand the task back to a human. Each one counts as a completed task, so a high resolution rate here means very little.`,
+      sampleTaskIds: deferred.slice(0, 5).map((t) => t.id)
+    });
+  }
+  if (refused.length >= 3 && rate(refused.length, n) >= 0.2) {
+    out.push({
+      kind: "refusal-rate",
+      severity: "concern",
+      summary: `${refused.length} of ${n} answers (${pct(rate(refused.length, n))}) are refusals carried downstream as content. That points at a prompt, a permission, or an upstream data problem rather than at any one answer.`,
+      sampleTaskIds: refused.slice(0, 5).map((t) => t.id)
+    });
+  }
+  if (empty.length >= 2 && rate(empty.length, n) >= 0.15) {
+    out.push({
+      kind: "empty-rate",
+      severity: "concern",
+      summary: `${empty.length} of ${n} answers (${pct(rate(empty.length, n))}) are empty or a bare null. The pipeline is recording a result where there is none.`,
+      sampleTaskIds: empty.slice(0, 5).map((t) => t.id)
+    });
+  }
+  const clusters = /* @__PURE__ */ new Map();
+  for (const t of tasks) {
+    if (t.empty) continue;
+    const fp = fingerprint(t.output);
+    let ids = clusters.get(fp);
+    if (!ids) {
+      ids = [];
+      clusters.set(fp, ids);
+    }
+    ids.push(t.id);
+  }
+  let biggest = [];
+  for (const ids of clusters.values()) if (ids.length > biggest.length) biggest = ids;
+  if (biggest.length >= 5 && rate(biggest.length, n) >= 0.4) {
+    out.push({
+      kind: "collapse",
+      severity: "concern",
+      summary: `${biggest.length} of ${n} answers (${pct(rate(biggest.length, n))}) are the same response to different inputs. A pipeline that has stopped reading its input looks exactly like this.`,
+      sampleTaskIds: biggest.slice(0, 5)
+    });
+  }
+  const groundedTasks = tasks.filter((t) => t.grounded);
+  if (groundedTasks.length >= MIN_BATCH) {
+    const barren = groundedTasks.filter((t) => t.atomsChecked === 0);
+    if (rate(barren.length, groundedTasks.length) >= 0.7) {
+      out.push({
+        kind: "atom-drought",
+        severity: "notice",
+        summary: `${barren.length} of ${groundedTasks.length} answers contain no figure, date, identifier or name to check against the source. Groundedness has very little to work with in this batch, so a clean result is a weak signal here.`,
+        sampleTaskIds: barren.slice(0, 5).map((t) => t.id)
+      });
+    }
+  }
+  const lengths = tasks.filter((t) => !t.empty).map((t) => t.output.length);
+  if (lengths.length >= MIN_BATCH) {
+    const mid = median(lengths);
+    const spread = mad(lengths, mid) * 1.4826 || 1;
+    const outliers = tasks.filter((t) => !t.empty).map((t) => ({ id: t.id, z: (t.output.length - mid) / spread })).filter((t) => Math.abs(t.z) >= 6);
+    if (outliers.length > 0 && outliers.length <= Math.max(2, Math.floor(n * 0.1))) {
+      out.push({
+        kind: "length-outlier",
+        severity: "notice",
+        summary: `${outliers.length} answer(s) are far shorter or longer than the rest of the batch. That is often where a truncation, a dump of raw context, or a different code path shows up.`,
+        sampleTaskIds: outliers.slice(0, 5).map((t) => t.id)
+      });
+    }
+  }
+  return out;
+}
+
 // src/aiwork/check.ts
 var DEGENERATE_PATTERNS = [
   "empty-string",
@@ -917,14 +1047,14 @@ function looksDeferred(output) {
   }
   return { deferred: false };
 }
-function fingerprint(s) {
+function fingerprint2(s) {
   return createHash("sha256").update(s.toLowerCase().replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16);
 }
 function checkBatch(records, opts = {}) {
   const duplicateThreshold = opts.duplicateThreshold ?? 3;
   const counts = /* @__PURE__ */ new Map();
   for (const r of records) {
-    const fp = fingerprint(r.output);
+    const fp = fingerprint2(r.output);
     counts.set(fp, (counts.get(fp) ?? 0) + 1);
   }
   const results = [];
@@ -936,10 +1066,13 @@ function checkBatch(records, opts = {}) {
     inconsistent: 0,
     malformed: 0
   };
+  const taskSignals = [];
   for (const record of records) {
     const problems = [];
+    let degenerateKind;
     for (const pattern of DEGENERATE_PATTERNS) {
       if (matchDegenerate(record.output, pattern)) {
+        degenerateKind = pattern;
         problems.push({
           kind: "degenerate",
           summary: `The answer ${describeDegenerate(pattern)}.`,
@@ -956,7 +1089,7 @@ function checkBatch(records, opts = {}) {
         evidence: deferral.matched ?? record.output.slice(0, 200)
       });
     }
-    const dupCount = counts.get(fingerprint(record.output)) ?? 0;
+    const dupCount = counts.get(fingerprint2(record.output)) ?? 0;
     if (dupCount >= duplicateThreshold && record.output.trim().length > 0) {
       problems.push({
         kind: "duplicated",
@@ -973,10 +1106,12 @@ function checkBatch(records, opts = {}) {
     let inconclusive2 = false;
     let inconclusiveReason;
     let atomsChecked = 0;
+    let groundingRan = false;
     if (!opts.skipGrounding) {
       const { sources, basis, note } = groundingSourcesFor(record);
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
+      groundingRan = basis !== "none";
       if (g.inconclusive) {
         inconclusive2 = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
@@ -994,6 +1129,15 @@ function checkBatch(records, opts = {}) {
       }
     }
     for (const p of problems) byKind[p.kind] += 1;
+    taskSignals.push({
+      id: record.id,
+      output: record.output,
+      deferred: deferral.deferred,
+      refused: degenerateKind === "model-refusal",
+      empty: degenerateKind === "empty-string" || degenerateKind === "null-literal",
+      atomsChecked,
+      grounded: groundingRan
+    });
     results.push({
       id: record.id,
       at: record.at,
@@ -1003,11 +1147,12 @@ function checkBatch(records, opts = {}) {
       atomsChecked
     });
   }
+  const signals = checkDistribution(taskSignals);
   const problematic = results.filter((r) => r.problems.length > 0).length;
   const inconclusiveCount = results.filter((r) => r.inconclusive).length;
   const clean = results.length - problematic - inconclusiveCount;
-  const pct = results.length > 0 ? Math.round(problematic / results.length * 100) : 0;
-  const headline = problematic === 0 ? `${results.length} answers checked, none carrying a problem this can detect.` : `${problematic} of ${results.length} answers (${pct}%) contain something the pipeline reported as a success.`;
+  const pct2 = results.length > 0 ? Math.round(problematic / results.length * 100) : 0;
+  const headline = problematic === 0 ? `${results.length} answers checked, none carrying a problem this can detect.` : `${problematic} of ${results.length} answers (${pct2}%) contain something the pipeline reported as a success.`;
   return {
     results,
     summary: {
@@ -1017,8 +1162,116 @@ function checkBatch(records, opts = {}) {
       inconclusive: inconclusiveCount,
       byKind,
       headline,
+      signals,
       caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
     }
+  };
+}
+
+// src/record/recorder.ts
+function asText(v) {
+  if (typeof v === "string") return v;
+  if (v == null) return "";
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+function createRecorder(options = {}) {
+  const buffer = [];
+  const prefix = options.idPrefix ?? "task";
+  let counter = 0;
+  const nextId = () => `${prefix}-${Date.now().toString(36)}-${(counter++).toString(36)}`;
+  const commit = (record) => {
+    buffer.push(record);
+    if (options.flushEvery && buffer.length >= options.flushEvery) {
+      void flush();
+    }
+    return record;
+  };
+  async function flush() {
+    if (buffer.length === 0) return 0;
+    const batch = buffer.splice(0, buffer.length);
+    const sink = options.sink;
+    if (!sink) return batch.length;
+    if (typeof sink === "function") {
+      await sink(batch);
+      return batch.length;
+    }
+    if (typeof sink === "string") {
+      const lines = batch.map((r) => JSON.stringify(r)).join("\n") + "\n";
+      appendFileSync(sink, lines, "utf8");
+      return batch.length;
+    }
+    const body = sink.project !== void 0 ? JSON.stringify({ project: sink.project, tasks: batch }) : batch.map((r) => JSON.stringify(r)).join("\n");
+    const res = await fetch(new URL("/v1/batches", sink.url), {
+      method: "POST",
+      headers: {
+        "content-type": sink.project !== void 0 ? "application/json" : "application/x-ndjson",
+        "x-api-key": sink.apiKey
+      },
+      body
+    });
+    if (!res.ok) {
+      buffer.unshift(...batch);
+      const detail = await res.text().catch(() => "");
+      throw new Error(`silentgreen sink rejected the batch (${res.status}): ${detail.slice(0, 300)}`);
+    }
+    return batch.length;
+  }
+  return {
+    async task(seed, body) {
+      const sources = [...seed.sources ?? []];
+      const actions = [];
+      const meta = { ...seed.meta ?? {} };
+      let input = seed.input ?? "";
+      let explicitOutput;
+      const ctx = {
+        source: (text) => {
+          if (Array.isArray(text)) sources.push(...text.filter((s) => typeof s === "string" && s.trim()));
+          else if (typeof text === "string" && text.trim()) sources.push(text);
+        },
+        action: (a) => actions.push(a),
+        input: (t) => {
+          input = t;
+        },
+        output: (t) => {
+          explicitOutput = t;
+        },
+        meta: (patch) => Object.assign(meta, patch)
+      };
+      const returned = await body(ctx);
+      const output = explicitOutput ?? asText(returned);
+      commit({
+        id: seed.id ?? nextId(),
+        ...seed.at ? { at: seed.at } : { at: (/* @__PURE__ */ new Date()).toISOString() },
+        input,
+        sources,
+        output,
+        ...actions.length > 0 ? { actions } : {},
+        ...Object.keys(meta).length > 0 ? { meta } : {}
+      });
+      return returned;
+    },
+    record(record) {
+      return commit({
+        id: record.id ?? nextId(),
+        at: record.at ?? (/* @__PURE__ */ new Date()).toISOString(),
+        input: record.input,
+        sources: record.sources,
+        output: record.output,
+        ...record.actions && record.actions.length > 0 ? { actions: record.actions } : {},
+        ...record.meta ? { meta: record.meta } : {}
+      });
+    },
+    pending: () => [...buffer],
+    check: (opts) => {
+      const records = [...buffer];
+      return { summary: checkBatch(records, opts).summary, records };
+    },
+    flush
   };
 }
 
@@ -1522,7 +1775,7 @@ function builtinBatches() {
 
 // src/ledger/chain.ts
 import { createHash as createHash2 } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { appendFileSync as appendFileSync2, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 var GENESIS_PREV = "0".repeat(64);
 function canonical(v) {
@@ -1577,7 +1830,7 @@ var Ledger = class {
     this.entries.push(entry);
     if (this.path) {
       mkdirSync(dirname(this.path), { recursive: true });
-      appendFileSync(this.path, `${JSON.stringify(entry)}
+      appendFileSync2(this.path, `${JSON.stringify(entry)}
 `, "utf8");
     }
     return entry;
@@ -1774,9 +2027,11 @@ export {
   checkBatch,
   checkConformance,
   checkConsistency,
+  checkDistribution,
   checkGrounding,
   confirmAssertion,
   coverageHonesty,
+  createRecorder,
   demoTasks,
   extractAtoms,
   extractTrace,
