@@ -49,8 +49,8 @@ function TopBar({ email }: { email: string }) {
   return (
     <header className="border-b border-rule">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-        <Link href="/" className="font-serif tracking-tight text-ink">
-          silent<span className="text-traced">green</span>
+        <Link href="/" className="font-mono text-[15px] font-medium tracking-tight text-ink">
+          silentgreen
         </Link>
         <div className="flex items-center gap-4 text-sm text-ink-soft">
           <span>{email}</span>
@@ -96,13 +96,13 @@ function CreateOrg({ onCreated, clearNeed }: { onCreated: (id: string) => void; 
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Fernweh Digital"
-        className="mt-5 w-full rounded-lg border border-rule-strong bg-ground-sunken px-3 py-2 text-sm text-ink outline-none focus:border-traced"
+        className="mt-5 w-full rounded-lg border border-rule-strong bg-ground-sunken px-3 py-2 text-sm text-ink outline-none focus:border-ink"
       />
       {error && <p className="mt-2 text-sm text-absent">{error}</p>}
       <button
         onClick={create}
         disabled={busy || name.trim().length < 2}
-        className="mt-4 rounded-lg bg-traced px-4 py-2 text-sm font-medium text-ground-raised hover:bg-traced disabled:opacity-60"
+        className="mt-4 rounded-lg bg-ink px-4 py-2 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
       >
         {busy ? 'Creating…' : 'Create'}
       </button>
@@ -175,9 +175,9 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="support-agent"
-        className="rounded-lg border border-rule-strong bg-ground-sunken px-3 py-1.5 text-sm text-ink outline-none focus:border-traced"
+        className="rounded-lg border border-rule-strong bg-ground-sunken px-3 py-1.5 text-sm text-ink outline-none focus:border-ink"
       />
-      <button onClick={create} disabled={busy} className="rounded-lg bg-traced px-3 py-1.5 text-sm text-ground-raised hover:bg-traced disabled:opacity-60">
+      <button onClick={create} disabled={busy} className="rounded-lg bg-ink px-3 py-1.5 text-sm text-paper transition-opacity hover:opacity-90 disabled:opacity-50">
         Add
       </button>
     </div>
@@ -230,7 +230,7 @@ function ProjectCard({ project, orgId }: { project: Project; orgId: string }) {
       </div>
 
       {summary && summary.batches.length > 0 && (
-        <ul className="mt-4 divide-y divide-line rounded-lg border border-rule">
+        <ul className="mt-4 divide-y divide-rule rounded-lg border border-rule">
           {summary.batches.slice(0, 5).map((b) => (
             <li key={b.id}>
               <Link

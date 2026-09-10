@@ -441,9 +441,13 @@ real batches that neither the builder nor a fixture author wrote.
 **Status.** Code complete, not deployed. `apps/api` (Express, Drizzle, Better
 Auth, ingest, ledger) exposes projects, `POST /v1/batches`, the project summary,
 the batch drill-down and `GET /v1/batches/:id/tasks/:taskId`. `apps/web` (Next.js)
-has the rebuilt marketing site (an evidence exhibit, no 3D), the session-gated
-dashboard, the batch page with the batch-shape signals, and the task inspector
-page (a redacted skeleton of the answer with the finding spans marked, since the
+has the marketing site (a cinematic dark hero with a react-three-fiber scene of
+the two documents and the verified threads between them, lazy-loaded on idle
+with a still fallback; GSAP scroll choreography; Lenis smooth scroll; the
+document-quality paper body; the live exhibit; dynamic OpenGraph images), the
+session-gated dashboard, the batch page with the batch-shape signals, and the
+task inspector page (a redacted skeleton of the answer with the finding spans
+marked, since the
 free tier never stores the value). Both typecheck and build. Deployment needs a
 live Neon URL and the Railway and Vercel projects.
 
