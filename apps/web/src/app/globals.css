@@ -1,77 +1,175 @@
 @import 'tailwindcss';
 
 /*
-  silentgreen palette.
+  silentgreen is a verification tool that produces an evidence record you can
+  forward to a client or an auditor. So the site is built to read as a checked
+  document, not a product page.
 
-  The green is not a reassuring green. It is patina: the colour a claim takes on
-  when it has sat unquestioned for a long time. "unproven" is the deliberate
-  one, an unsaturated slate that reads as withheld judgement rather than an
-  error, because a first-class unproven verdict is the whole point.
+  Two rules hold the visual system together:
+
+    1. Colour is testimony. The three verdict hues appear only where a verdict is
+       being rendered. There is no decorative colour, no gradient wash.
+    2. Monospace is a factual claim. Anything set in mono is literal text that was
+       captured: an answer, a source, an atom, a verdict name.
+
+  The ground is a cool paper stock. `withheld` (the unproven verdict) is a dry,
+  flat grey-tan on purpose: it must never read as an error and never look
+  smaller than the other two, because a first-class unproven verdict is the
+  whole argument.
 */
+
 @theme {
-  --color-ink: #0a0e14;
-  --color-ink-raised: #111823;
-  --color-ink-sunken: #070a0f;
+  /* grounds: a cool ledger stock, not cream */
+  --color-ground: #eceeeb;
+  --color-ground-raised: #f5f6f3;
+  --color-ground-sunken: #e2e4df;
 
-  --color-patina: #3da47e;
-  --color-patina-bright: #6fe3b8;
-  --color-amber: #d9924e;
-  --color-slate-verdict: #7c8a9c;
+  /* ink */
+  --color-ink: #1a1c1a;
+  --color-ink-soft: #565853;
+  --color-ink-faint: #797b73;
 
-  --color-paper: #e8edf0;
-  --color-paper-dim: #9aa6b2;
-  --color-paper-faint: #61707e;
+  /* verdicts: the only colours that carry meaning */
+  --color-traced: #2f6b4a; /* proven, traced to source */
+  --color-absent: #9a3327; /* violated, appears nowhere: a correction mark */
+  --color-withheld: #767871; /* unproven: withheld judgement, not an alarm */
 
-  --color-line: rgba(232, 237, 240, 0.09);
-  --color-line-bright: rgba(232, 237, 240, 0.16);
+  /* one structural accent, used sparingly: the exhibit stamp and links */
+  --color-stamp: #2f4a6b;
 
-  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains), ui-monospace, 'SF Mono', monospace;
+  /* ledger ruling */
+  --color-rule: #d9d6ca;
+  --color-rule-strong: #c3bfae;
 
-  --radius-glass: 16px;
+  --font-serif: var(--font-serif), 'Iowan Old Style', Georgia, serif;
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, 'SF Mono', monospace;
 }
 
 :root {
+  color-scheme: light;
+  --sg-mark-absent: rgba(154, 51, 39, 0.13);
+  --sg-mark-traced: rgba(47, 107, 74, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --color-ground: #17171a;
+    --color-ground-raised: #1e1e21;
+    --color-ground-sunken: #121214;
+    --color-ink: #e7e5dd;
+    --color-ink-soft: #a3a096;
+    --color-ink-faint: #74716a;
+    --color-traced: #6bbd8f;
+    --color-absent: #d98a78;
+    --color-withheld: #9a9384;
+    --color-stamp: #8fb0d8;
+    --color-rule: #34343a;
+    --color-rule-strong: #45454d;
+    --sg-mark-absent: rgba(217, 138, 120, 0.16);
+    --sg-mark-traced: rgba(107, 189, 143, 0.16);
+  }
+}
+
+:root[data-theme='dark'] {
   color-scheme: dark;
+  --color-ground: #17171a;
+  --color-ground-raised: #1e1e21;
+  --color-ground-sunken: #121214;
+  --color-ink: #e7e5dd;
+  --color-ink-soft: #a3a096;
+  --color-ink-faint: #74716a;
+  --color-traced: #6bbd8f;
+  --color-absent: #d98a78;
+  --color-withheld: #9a9384;
+  --color-stamp: #8fb0d8;
+  --color-rule: #34343a;
+  --color-rule-strong: #45454d;
+  --sg-mark-absent: rgba(217, 138, 120, 0.16);
+  --sg-mark-traced: rgba(107, 189, 143, 0.16);
 }
 
 html {
-  background: var(--color-ink);
+  background: var(--color-ground);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  background:
-    radial-gradient(1200px 800px at 15% -10%, rgba(61, 164, 126, 0.1), transparent 60%),
-    radial-gradient(900px 700px at 110% 10%, rgba(111, 140, 200, 0.06), transparent 55%),
-    var(--color-ink);
-  color: var(--color-paper);
-  font-family: var(--font-sans);
-  font-feature-settings: 'cv05', 'cv08', 'ss01';
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-serif);
   min-height: 100dvh;
+  font-size: 1.0625rem;
+  line-height: 1.65;
 }
 
 ::selection {
-  background: rgba(111, 227, 184, 0.24);
+  background: var(--sg-mark-traced);
 }
 
-/* A glass panel. Used for every raised surface, so the product has one material. */
-.glass {
-  background: linear-gradient(160deg, rgba(232, 237, 240, 0.055), rgba(232, 237, 240, 0.02));
-  border: 1px solid var(--color-line-bright);
-  border-radius: var(--radius-glass);
-  backdrop-filter: blur(14px) saturate(1.15);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  box-shadow:
-    0 1px 0 0 rgba(232, 237, 240, 0.06) inset,
-    0 24px 60px -24px rgba(0, 0, 0, 0.6);
+/*
+  A panel is a plain ruled surface, like a boxed section in a report. No blur,
+  no shadow theatre.
+*/
+.panel {
+  background: var(--color-ground-raised);
+  border: 1px solid var(--color-rule);
+}
+.panel-sunken {
+  background: var(--color-ground-sunken);
+  border: 1px solid var(--color-rule);
 }
 
-.glass-quiet {
-  background: rgba(232, 237, 240, 0.025);
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-glass);
+/* The reviewer's margin: a hairline with a short tick, like a document edge. */
+.rule-tick {
+  position: relative;
+}
+.rule-tick::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 1.25rem;
+  height: 1px;
+  background: var(--color-rule-strong);
+}
+
+/* An exhibit stamp: the three verdicts, and section headers. */
+.stamp {
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* A fabrication mark in the answer: an oxidised underline that can wipe on. */
+.mark-absent {
+  background: linear-gradient(var(--sg-mark-absent), var(--sg-mark-absent)) no-repeat;
+  background-size: 100% 100%;
+  box-shadow: inset 0 -2px 0 var(--color-absent);
+  color: var(--color-absent);
+  padding: 0 1px;
+}
+.mark-traced {
+  background: linear-gradient(var(--sg-mark-traced), var(--sg-mark-traced)) no-repeat;
+  background-size: 100% 100%;
+  box-shadow: inset 0 -2px 0 var(--color-traced);
+  color: var(--color-traced);
+  padding: 0 1px;
+}
+
+@keyframes sg-wipe {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+.wipe-on {
+  animation: sg-wipe 260ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -79,6 +177,7 @@ body {
   *::before,
   *::after {
     animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
 }

@@ -331,12 +331,17 @@ function nearestSourceNumber(value: number, sourceNumbers: ReadonlySet<string>):
   const digits = String(Math.round(Math.abs(value)));
   for (const key of sourceNumbers) {
     const n = Number(key);
-    if (!Number.isFinite(n) || n === value) continue;
+    if (!Number.isFinite(n) || n === value || n === 0) continue;
     const gap = Math.abs(n - value);
     const rel = gap / Math.max(Math.abs(value), 1);
+    // A transposition keeps the digits and the magnitude: 539 and 593, not 124
+    // and 412. Require the same digit multiset and a ratio inside [0.5, 2].
+    const ratio = Math.abs(n) / Math.max(Math.abs(value), 1e-9);
     const sameDigitsReordered =
       String(Math.round(Math.abs(n))).length === digits.length &&
-      String(Math.round(Math.abs(n))).split('').sort().join('') === digits.split('').sort().join('');
+      String(Math.round(Math.abs(n))).split('').sort().join('') === digits.split('').sort().join('') &&
+      ratio >= 0.5 &&
+      ratio <= 2;
     if ((rel <= 0.02 || sameDigitsReordered) && gap < bestGap) {
       best = n;
       bestGap = gap;

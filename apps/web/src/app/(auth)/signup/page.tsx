@@ -28,16 +28,16 @@ export default function SignupPage() {
 
   return (
     <AuthShell title="Create an account" alt={{ href: '/login', label: 'I already have one' }}>
-      <form onSubmit={onSubmit} className="space-y-4">
+      <form onSubmit={onSubmit} className="space-y-5">
         <Field label="Name" type="text" value={name} onChange={setName} autoComplete="name" />
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
         <Field label="Password" type="password" value={password} onChange={setPassword} autoComplete="new-password" />
-        <p className="text-xs text-paper-faint">At least 10 characters.</p>
-        {error && <p className="text-sm text-amber">{error}</p>}
+        <p className="text-xs text-ink-faint">At least 10 characters.</p>
+        {error && <p className="text-sm text-absent">{error}</p>}
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-lg bg-patina py-2.5 text-sm font-medium text-ink-sunken transition-colors hover:bg-patina-bright disabled:opacity-60"
+          className="w-full border border-stamp bg-stamp py-2.5 font-mono text-sm text-ground-raised transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {busy ? 'Creating…' : 'Create account'}
         </button>

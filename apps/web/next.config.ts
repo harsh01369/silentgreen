@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 
 const config: NextConfig = {
   reactStrictMode: true,
-  transpilePackages: ['three'],
   outputFileTracingRoot: fileURLToPath(new URL('.', import.meta.url)),
   async rewrites() {
     // Proxy the API in development so cookies are same-origin.

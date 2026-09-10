@@ -693,10 +693,11 @@ function nearestSourceNumber(value, sourceNumbers) {
   const digits = String(Math.round(Math.abs(value)));
   for (const key of sourceNumbers) {
     const n = Number(key);
-    if (!Number.isFinite(n) || n === value) continue;
+    if (!Number.isFinite(n) || n === value || n === 0) continue;
     const gap = Math.abs(n - value);
     const rel = gap / Math.max(Math.abs(value), 1);
-    const sameDigitsReordered = String(Math.round(Math.abs(n))).length === digits.length && String(Math.round(Math.abs(n))).split("").sort().join("") === digits.split("").sort().join("");
+    const ratio2 = Math.abs(n) / Math.max(Math.abs(value), 1e-9);
+    const sameDigitsReordered = String(Math.round(Math.abs(n))).length === digits.length && String(Math.round(Math.abs(n))).split("").sort().join("") === digits.split("").sort().join("") && ratio2 >= 0.5 && ratio2 <= 2;
     if ((rel <= 0.02 || sameDigitsReordered) && gap < bestGap) {
       best = n;
       bestGap = gap;

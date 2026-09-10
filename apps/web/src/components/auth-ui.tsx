@@ -10,19 +10,19 @@ export function AuthShell({
   alt: { href: string; label: string };
 }) {
   return (
-    <main className="flex min-h-[100dvh] items-center justify-center px-6">
-      <div className="glass w-full max-w-sm rounded-2xl p-8">
-        <Link href="/" className="font-display text-lg tracking-tight text-paper">
-          silent<span className="text-patina-bright">green</span>
-        </Link>
-        <h1 className="mt-6 font-display text-2xl text-paper">{title}</h1>
+    <main className="mx-auto flex min-h-[100dvh] max-w-sm flex-col justify-center px-6">
+      <Link href="/" className="font-mono text-[15px] font-medium tracking-tight text-ink">
+        silentgreen
+      </Link>
+      <div className="mt-8 border-t border-rule pt-8">
+        <p className="font-mono text-[11px] uppercase tracking-wider text-ink-faint">{title}</p>
         <div className="mt-6">{children}</div>
-        <p className="mt-6 text-sm text-paper-dim">
-          <Link href={alt.href} className="text-patina-bright hover:underline">
-            {alt.label}
-          </Link>
-        </p>
       </div>
+      <p className="mt-8 border-t border-rule pt-4 font-mono text-xs text-ink-soft">
+        <Link href={alt.href} className="text-stamp hover:underline">
+          {alt.label}
+        </Link>
+      </p>
     </main>
   );
 }
@@ -42,14 +42,14 @@ export function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm text-paper-dim">{label}</span>
+      <span className="mb-1.5 block font-mono text-xs text-ink-soft">{label}</span>
       <input
         type={type}
         value={value}
         autoComplete={autoComplete}
         onChange={(e) => onChange(e.target.value)}
         required
-        className="w-full rounded-lg border border-line-bright bg-ink-sunken/60 px-3 py-2 text-sm text-paper outline-none transition-colors focus:border-patina"
+        className="w-full border border-rule-strong bg-ground-raised px-3 py-2 font-mono text-sm text-ink outline-none transition-colors focus:border-stamp"
       />
     </label>
   );
