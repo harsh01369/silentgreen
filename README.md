@@ -176,8 +176,9 @@ fails.
 | degenerate-and-deferral | 6 | 1.00 | 1.00 | 0 |
 | self-contradiction | 7 | 1.00 | 1.00 | 0 |
 | structured-output | 5 | 1.00 | 1.00 | 0 |
+| cross-record | 4 | 1.00 | 1.00 | 0 |
 | inconclusive | 3 | 1.00 | 1.00 | 0 |
-| **overall** | **61** | **1.000** | **1.000** | **0** |
+| **overall** | **65** | **1.000** | **1.000** | **0** |
 
 **This number is worth very little on its own, and the plan says so.** The corpus is
 entirely synthetic. It was written to pin down intended behaviour, including adversarial

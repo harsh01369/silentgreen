@@ -22,7 +22,7 @@
 import { type GroundingOptions } from '../verify/grounding';
 import { type BatchSignal } from '../verify/distribution';
 import { type TaskRecord } from './record';
-export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated' | 'inconsistent' | 'malformed';
+export type TaskProblemKind = 'degenerate' | 'ungrounded' | 'deferred' | 'duplicated' | 'inconsistent' | 'malformed' | 'misattributed';
 export interface TaskProblem {
     readonly kind: TaskProblemKind;
     /** One sentence, written for somebody deciding whether to act. */

@@ -14,6 +14,7 @@ export { checkBatch, looksDeferred, type TaskResult, type TaskProblem, type Task
 export { checkGrounding, extractAtoms, type GroundingResult, type Atom, type AtomKind } from './verify/grounding';
 export { checkConsistency, type Inconsistency, type InconsistencyKind } from './verify/consistency';
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
+export { checkAssociation, type Misassociation } from './verify/association';
 export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
 export { parseContract, evaluateContract, type Contract, type ContractBasis, type ContractReport, type ContractTaskResult, type ClauseOutcome, type ClauseVerdict, type MustContain, type ActionRule, } from './aiwork/contract';
 export { draftContract } from './aiwork/contract-draft';

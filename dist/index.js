@@ -1055,6 +1055,61 @@ function checkConformance(output, input = "") {
   return out;
 }
 
+// src/verify/association.ts
+function splitRecords(source) {
+  const headerRe = /\b((?:invoice|inv|order|ord|account|acct|ref|reference|po)[\s#:-]*[A-Z0-9][A-Z0-9-]{2,})/gi;
+  const headers = [...source.matchAll(headerRe)];
+  if (headers.length >= 2) {
+    const out = [];
+    for (let i = 0; i < headers.length; i++) {
+      const start = headers[i].index ?? 0;
+      const end = i + 1 < headers.length ? headers[i + 1].index ?? source.length : source.length;
+      out.push({ label: headers[i][1].replace(/\s+/g, " ").trim(), text: source.slice(start, end) });
+    }
+    return out;
+  }
+  const blocks = source.split(/\n\s*\n/).map((b, i) => ({ label: `block ${i + 1}`, text: b })).filter((b) => /[£$€¥]\s?\d|\d[\d,]*\.\d{2}|\b(?:USD|GBP|EUR)\s?\d/.test(b.text));
+  return blocks.length >= 2 ? blocks : [];
+}
+var MONEY_G = /[£$€¥]\s?\d[\d,]*(?:\.\d{2})?|\d[\d,]*\.\d{2}|\b(?:USD|GBP|EUR|INR)\s?\d[\d,]*(?:\.\d+)?/g;
+var DATE_G = /\b\d{4}-\d{2}-\d{2}\b/g;
+function num(s) {
+  return Number(s.replace(/[^0-9.]/g, ""));
+}
+function recordsContaining(records, test) {
+  return records.filter((r) => test(r.text));
+}
+function checkAssociation(output, sources) {
+  const source = sources.join("\n\n");
+  const records = splitRecords(source);
+  if (records.length < 2) return [];
+  const out = [];
+  const pairRe = /([£$€¥]\s?\d[\d,]*(?:\.\d{2})?|\d[\d,]*\.\d{2}|(?:USD|GBP|EUR|INR)\s?\d[\d,]*(?:\.\d+)?)[^.\n]{0,60}?\bdue\b[^.\n]{0,20}?(\d{4}-\d{2}-\d{2})|\bdue\b[^.\n]{0,20}?(\d{4}-\d{2}-\d{2})[^.\n]{0,60}?([£$€¥]\s?\d[\d,]*(?:\.\d{2})?|\d[\d,]*\.\d{2})/gi;
+  for (const m of output.matchAll(pairRe)) {
+    const amountRaw = (m[1] ?? m[4] ?? "").trim();
+    const dateRaw = (m[2] ?? m[3] ?? "").trim();
+    if (!amountRaw || !dateRaw) continue;
+    const amountVal = num(amountRaw);
+    const amountRecords = recordsContaining(records, (t) => {
+      for (const a of t.matchAll(MONEY_G)) if (Math.abs(num(a[0]) - amountVal) < 5e-3) return true;
+      return false;
+    });
+    const dateRecords = recordsContaining(records, (t) => t.includes(dateRaw));
+    if (amountRecords.length !== 1 || dateRecords.length !== 1) continue;
+    const amountRec = amountRecords[0];
+    const dateRec = dateRecords[0];
+    if (amountRec.label === dateRec.label) continue;
+    const datesInAmountRec = [...amountRec.text.matchAll(DATE_G)].map((d) => d[0]);
+    if (datesInAmountRec.length === 0 || datesInAmountRec.includes(dateRaw)) continue;
+    out.push({
+      summary: `The answer pairs ${amountRaw} with a due date of ${dateRaw}, but the source pairs them differently: ${amountRaw} belongs to ${amountRec.label} (due ${datesInAmountRec[0]}), and ${dateRaw} belongs to ${dateRec.label}. Both facts are in the source; the answer may be about the wrong record.`,
+      evidence: `${amountRaw} in "${amountRec.label}"; ${dateRaw} in "${dateRec.label}"`
+    });
+  }
+  const seen = /* @__PURE__ */ new Set();
+  return out.filter((o) => seen.has(o.summary) ? false : (seen.add(o.summary), true));
+}
+
 // src/verify/distribution.ts
 var MIN_BATCH = 8;
 function fingerprint(s) {
@@ -1199,7 +1254,8 @@ function checkBatch(records, opts = {}) {
     deferred: 0,
     duplicated: 0,
     inconsistent: 0,
-    malformed: 0
+    malformed: 0,
+    misattributed: 0
   };
   const taskSignals = [];
   for (const record of records) {
@@ -1247,6 +1303,11 @@ function checkBatch(records, opts = {}) {
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
       groundingRan = basis !== "none";
+      if (basis === "sources") {
+        for (const bad of checkAssociation(record.output, sources)) {
+          problems.push({ kind: "misattributed", summary: bad.summary, evidence: bad.evidence });
+        }
+      }
       if (g.inconclusive) {
         inconclusive2 = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
@@ -1298,7 +1359,7 @@ function checkBatch(records, opts = {}) {
       byKind,
       headline,
       signals,
-      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+      caveat: "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, built from facts the source pairs differently, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
     }
   };
 }
@@ -2351,6 +2412,41 @@ var structured = [
     label: { id: "so-05-clean-bare", verdict: "clean", note: "parses, and both values trace to the source" }
   }
 ];
+var TWO_INVOICES = `Invoice INV-2026-0501 for Fernweh Supply Ltd
+Issued 2026-08-02, due 2026-09-02
+Subtotal \xA3300.00
+Total due \xA3360.00
+
+Invoice INV-2026-0502 for Fernweh Supply Ltd
+Issued 2026-08-20, due 2026-10-20
+Subtotal \xA3700.00
+Total due \xA3840.00`;
+var crossRecord = [
+  {
+    id: "xr-01-amount-from-one-date-from-other",
+    source: TWO_INVOICES,
+    output: "Your balance of \xA3360.00 is due on 2026-10-20.",
+    label: { id: "xr-01-amount-from-one-date-from-other", verdict: "problem", kinds: ["misattributed"], note: "\xA3360 belongs to the first invoice, 2026-10-20 to the second" }
+  },
+  {
+    id: "xr-02-correct-pairing",
+    source: TWO_INVOICES,
+    output: "Your balance of \xA3840.00 is due on 2026-10-20. The invoice is INV-2026-0502.",
+    label: { id: "xr-02-correct-pairing", verdict: "clean", note: "amount and due date both belong to the second invoice" }
+  },
+  {
+    id: "xr-03-currency-code-prefix-faithful",
+    source: "Invoice INV-9. Total due GBP 685.20. Issued 2026-08-14, due 2026-09-13.",
+    output: "The amount outstanding is GBP 685.20, due on 2026-09-13.",
+    label: { id: "xr-03-currency-code-prefix-faithful", verdict: "clean", note: "currency written as a code before the number is still the same amount" }
+  },
+  {
+    id: "xr-04-org-suffix-faithful",
+    source: "Account holder: Northwind Traders Ltd. Balance \xA3120.00.",
+    output: "This concerns the account for Northwind Traders Limited, balance \xA3120.00.",
+    label: { id: "xr-04-org-suffix-faithful", verdict: "clean", note: "Ltd and Limited are the same entity" }
+  }
+];
 function casesToRecords(cases) {
   return {
     records: cases.map((k) => ({
@@ -2369,6 +2465,7 @@ function builtinBatches() {
   const inc = casesToRecords(inconclusive);
   const con = casesToRecords(contradiction);
   const str2 = casesToRecords(structured);
+  const xr = casesToRecords(crossRecord);
   return [
     { name: "billing-support", synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: "faithful-adversarial", synthetic: true, records: faith.records, labels: faith.labels },
@@ -2376,6 +2473,7 @@ function builtinBatches() {
     { name: "degenerate-and-deferral", synthetic: true, records: deg.records, labels: deg.labels },
     { name: "self-contradiction", synthetic: true, records: con.records, labels: con.labels },
     { name: "structured-output", synthetic: true, records: str2.records, labels: str2.labels },
+    { name: "cross-record", synthetic: true, records: xr.records, labels: xr.labels },
     { name: "inconclusive", synthetic: true, records: inc.records, labels: inc.labels }
   ];
 }
@@ -2631,6 +2729,7 @@ export {
   DEFAULT_GATE,
   Ledger,
   builtinBatches,
+  checkAssociation,
   checkBatch,
   checkConformance,
   checkConsistency,

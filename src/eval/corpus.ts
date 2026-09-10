@@ -317,6 +317,45 @@ const structured: readonly Case[] = [
   },
 ];
 
+/* ---------------------------------------------------------- cross-record --- */
+
+const TWO_INVOICES = `Invoice INV-2026-0501 for Fernweh Supply Ltd
+Issued 2026-08-02, due 2026-09-02
+Subtotal £300.00
+Total due £360.00
+
+Invoice INV-2026-0502 for Fernweh Supply Ltd
+Issued 2026-08-20, due 2026-10-20
+Subtotal £700.00
+Total due £840.00`;
+
+const crossRecord: readonly Case[] = [
+  {
+    id: 'xr-01-amount-from-one-date-from-other',
+    source: TWO_INVOICES,
+    output: 'Your balance of £360.00 is due on 2026-10-20.',
+    label: { id: 'xr-01-amount-from-one-date-from-other', verdict: 'problem', kinds: ['misattributed'], note: '£360 belongs to the first invoice, 2026-10-20 to the second' },
+  },
+  {
+    id: 'xr-02-correct-pairing',
+    source: TWO_INVOICES,
+    output: 'Your balance of £840.00 is due on 2026-10-20. The invoice is INV-2026-0502.',
+    label: { id: 'xr-02-correct-pairing', verdict: 'clean', note: 'amount and due date both belong to the second invoice' },
+  },
+  {
+    id: 'xr-03-currency-code-prefix-faithful',
+    source: 'Invoice INV-9. Total due GBP 685.20. Issued 2026-08-14, due 2026-09-13.',
+    output: 'The amount outstanding is GBP 685.20, due on 2026-09-13.',
+    label: { id: 'xr-03-currency-code-prefix-faithful', verdict: 'clean', note: 'currency written as a code before the number is still the same amount' },
+  },
+  {
+    id: 'xr-04-org-suffix-faithful',
+    source: 'Account holder: Northwind Traders Ltd. Balance £120.00.',
+    output: 'This concerns the account for Northwind Traders Limited, balance £120.00.',
+    label: { id: 'xr-04-org-suffix-faithful', verdict: 'clean', note: 'Ltd and Limited are the same entity' },
+  },
+];
+
 /* -------------------------------------------------------------------- assembly */
 
 function casesToRecords(cases: readonly Case[]): { records: readonly TaskRecord[]; labels: readonly TaskLabel[] } {
@@ -338,6 +377,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
   const inc = casesToRecords(inconclusive);
   const con = casesToRecords(contradiction);
   const str = casesToRecords(structured);
+  const xr = casesToRecords(crossRecord);
 
   return [
     { name: 'billing-support', synthetic: true, records: demoTasks(), labels: billingLabels },
@@ -346,6 +386,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
     { name: 'degenerate-and-deferral', synthetic: true, records: deg.records, labels: deg.labels },
     { name: 'self-contradiction', synthetic: true, records: con.records, labels: con.labels },
     { name: 'structured-output', synthetic: true, records: str.records, labels: str.labels },
+    { name: 'cross-record', synthetic: true, records: xr.records, labels: xr.labels },
     { name: 'inconclusive', synthetic: true, records: inc.records, labels: inc.labels },
   ];
 }

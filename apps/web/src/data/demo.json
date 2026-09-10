@@ -34,8 +34,9 @@
       "deferred": 1,
       "duplicated": 3,
       "inconsistent": 0,
-      "malformed": 0
+      "malformed": 0,
+      "misattributed": 0
     },
-    "caveat": "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
+    "caveat": "This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, built from facts the source pairs differently, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model."
   }
 }

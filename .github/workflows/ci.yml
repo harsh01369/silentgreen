@@ -25,6 +25,18 @@ jobs:
       - name: score the checks against the labelled corpus
         run: npm run dev -- eval
 
+      - name: the CLI surfaces are wired
+        run: |
+          # `check` exits non-zero when it finds problems, which the demo always has.
+          npm run --silent dev -- check --json > report.json || true
+          node -e 'const j=require("./report.json"); if(j.counts.total!==20||j.counts.problems!==7||j.tasks.length!==20) throw new Error("check --json shape changed: "+JSON.stringify(j.counts))'
+          npx tsx -e "import {demoTasks} from './src/aiwork/demo'; import {writeFileSync} from 'node:fs'; writeFileSync('ci-demo.jsonl', demoTasks().map(t=>JSON.stringify(t)).join('\n'))"
+          npm run --silent dev -- contract ci-demo.jsonl --name ci | tee ci.sg.yaml | grep -q 'basis: intent'
+          sed -i 's/TODO:.*/Harsh, CI fixture, these rules describe the demo pipeline"/' ci.sg.yaml
+          npm run --silent dev -- check ci-demo.jsonl --contract ci.sg.yaml --json > cr.json || true
+          node -e 'const j=require("./cr.json"); if(!j.contract||j.contract.pipeline!=="ci") throw new Error("contract not in report")'
+          rm -f ci-demo.jsonl ci.sg.yaml report.json cr.json
+
       - name: build
         run: npm run build
 

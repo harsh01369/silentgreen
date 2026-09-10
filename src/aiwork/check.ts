@@ -25,6 +25,7 @@ import { checkGrounding, type GroundingOptions, type UngroundedAtom } from '../v
 import { matchDegenerate, describeDegenerate } from '../verify/assert';
 import { checkConsistency } from '../verify/consistency';
 import { checkConformance } from '../verify/conformance';
+import { checkAssociation } from '../verify/association';
 import { checkDistribution, type BatchSignal, type TaskSignal } from '../verify/distribution';
 import type { DegeneratePattern } from '../contract/types';
 import { groundingSourcesFor, type TaskRecord } from './record';
@@ -35,7 +36,8 @@ export type TaskProblemKind =
   | 'deferred'
   | 'duplicated'
   | 'inconsistent'
-  | 'malformed';
+  | 'malformed'
+  | 'misattributed';
 
 export interface TaskProblem {
   readonly kind: TaskProblemKind;
@@ -146,6 +148,7 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
     duplicated: 0,
     inconsistent: 0,
     malformed: 0,
+    misattributed: 0,
   };
 
   const taskSignals: TaskSignal[] = [];
@@ -203,6 +206,12 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
       const g = checkGrounding(record.output, sources, opts);
       atomsChecked = g.checked;
       groundingRan = basis !== 'none';
+
+      if (basis === 'sources') {
+        for (const bad of checkAssociation(record.output, sources)) {
+          problems.push({ kind: 'misattributed', summary: bad.summary, evidence: bad.evidence });
+        }
+      }
       if (g.inconclusive) {
         inconclusive = problems.length === 0;
         inconclusiveReason = note ? `${g.reason} ${note}` : g.reason;
@@ -267,7 +276,7 @@ export function checkBatch(records: readonly TaskRecord[], opts: CheckOptions = 
       headline,
       signals,
       caveat:
-        'This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.',
+        'This checks whether an answer is empty, refused, unrendered, deferred, duplicated, self-contradictory, malformed when it should be structured, built from facts the source pairs differently, or contains specifics absent from its own source material. It does not check whether the answer is wise, complete or appropriate, and a clean result is not a claim that the work was good. No model was asked to grade another model.',
     },
   };
 }
