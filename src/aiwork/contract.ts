@@ -16,6 +16,7 @@
  * nobody should be trusting.
  */
 
+import { createHash } from 'node:crypto';
 import { parseYaml, type YamlValue } from '../util/yaml';
 import { extractAtoms, checkGrounding, type AtomKind } from '../verify/grounding';
 import { checkConsistency } from '../verify/consistency';
@@ -43,6 +44,15 @@ export interface Contract {
   readonly pipeline: string;
   readonly basis: ContractBasis;
   readonly attests: string;
+  /**
+   * The prompt or instruction file this contract was confirmed against, and a
+   * hash of it at that moment. When `check` is given the current prompt and it
+   * no longer matches, every result this contract would call `proven` becomes
+   * `unproven`: the thing the rules were written for has changed underneath
+   * them, and a green result about a prompt that no longer exists is exactly
+   * what this tool refuses to give.
+   */
+  readonly bound_to?: { readonly prompt: string; readonly prompt_sha: string };
   readonly output?: {
     readonly must_contain?: readonly MustContain[];
     readonly must_not_contain?: readonly MustContain[];
@@ -51,6 +61,13 @@ export interface Contract {
   };
   readonly actions?: readonly ActionRule[];
   readonly consistency?: boolean;
+}
+
+export function promptSha(text: string): string {
+  // A prompt is words. Every run of whitespace collapses to one space, so a
+  // reflow, a re-indent or a trailing newline is not read as a change; a
+  // changed word is.
+  return createHash('sha256').update(text.replace(/\s+/g, ' ').trim()).digest('hex');
 }
 
 export interface ClauseOutcome {
@@ -77,6 +94,14 @@ export interface ContractReport {
   };
   /** The coverage-honesty sentence for this contract. */
   readonly honesty: string;
+  /** True when the bound prompt has changed since the contract was confirmed. */
+  readonly stale: boolean;
+  readonly staleReason?: string;
+}
+
+export interface EvaluateOptions {
+  /** The current text of the prompt the contract is `bound_to`, to check for drift. */
+  readonly promptText?: string;
 }
 
 /* --------------------------------------------------------------- parsing --- */
@@ -120,6 +145,16 @@ export function parseContract(text: string, filename = 'contract'): { contract?:
     );
   } else if (/^todo\b/i.test(attests) || /your name, the date/i.test(attests)) {
     errors.push(`${filename}: "attests" is still the placeholder from the draft. Replace it with who is standing behind these rules and how they know.`);
+  }
+
+  let bound: Contract['bound_to'];
+  if (obj.bound_to && typeof obj.bound_to === 'object' && !Array.isArray(obj.bound_to)) {
+    const bt = obj.bound_to as Record<string, YamlValue>;
+    if (typeof bt.prompt === 'string' && typeof bt.prompt_sha === 'string') {
+      bound = { prompt: bt.prompt, prompt_sha: bt.prompt_sha };
+    } else {
+      errors.push(`${filename}: "bound_to" needs both "prompt" (a path) and "prompt_sha" (the hash it was confirmed against)`);
+    }
   }
 
   const out = obj.output;
@@ -170,6 +205,7 @@ export function parseContract(text: string, filename = 'contract'): { contract?:
     pipeline,
     basis: basis as ContractBasis,
     attests,
+    ...(bound ? { bound_to: bound } : {}),
     ...(Object.keys(output).length > 0 ? { output } : {}),
     ...(actions.length > 0 ? { actions } : {}),
     ...(obj.consistency === true ? { consistency: true } : {}),
@@ -300,12 +336,29 @@ function worst(verdicts: readonly ClauseVerdict[]): ClauseVerdict {
   return 'proven';
 }
 
-export function evaluateContract(contract: Contract, records: readonly TaskRecord[]): ContractReport {
+export function evaluateContract(
+  contract: Contract,
+  records: readonly TaskRecord[],
+  opts: EvaluateOptions = {},
+): ContractReport {
   const tasks: ContractTaskResult[] = [];
   const byClause: Record<string, { proven: number; violated: number; unproven: number }> = {};
   const tally = (c: string, v: ClauseVerdict) => {
     (byClause[c] ??= { proven: 0, violated: 0, unproven: 0 })[v] += 1;
   };
+
+  // Prompt drift: if the contract is bound to a prompt and we were handed the
+  // current one, and it no longer matches, nothing this contract says can be
+  // called proven until it is re-confirmed against the new prompt.
+  let stale = false;
+  let staleReason: string | undefined;
+  if (contract.bound_to && opts.promptText !== undefined) {
+    if (promptSha(opts.promptText) !== contract.bound_to.prompt_sha) {
+      stale = true;
+      staleReason = `The prompt this contract was confirmed against (${contract.bound_to.prompt}) has changed. Its rules may no longer describe what the pipeline is for, so every result it would call proven is reported as unproven until someone re-confirms it against the new prompt.`;
+    }
+  }
+  const degrade = (v: ClauseVerdict): ClauseVerdict => (stale && v === 'proven' ? 'unproven' : v);
 
   for (const record of records) {
     const clauses: ClauseOutcome[] = [];
@@ -407,8 +460,11 @@ export function evaluateContract(contract: Contract, records: readonly TaskRecor
       }
     }
 
-    for (const co of clauses) tally(co.clause, co.verdict);
-    tasks.push({ id: record.id, verdict: worst(clauses.map((c) => c.verdict)), clauses });
+    const degraded = stale
+      ? clauses.map((co) => (co.verdict === 'proven' ? { ...co, verdict: degrade(co.verdict), detail: `${co.detail} (held, but reported unproven: the bound prompt changed)` } : co))
+      : clauses;
+    for (const co of degraded) tally(co.clause, co.verdict);
+    tasks.push({ id: record.id, verdict: worst(degraded.map((c) => c.verdict)), clauses: degraded });
   }
 
   const summary = {
@@ -419,6 +475,7 @@ export function evaluateContract(contract: Contract, records: readonly TaskRecor
   };
 
   const honesty =
+    (stale ? `${staleReason} ` : '') +
     `These verdicts are measured against a contract on a ${contract.basis} basis. ` +
     (contract.basis === 'intent'
       ? 'A proven result means the work matches what a person wrote down that it is for. '
@@ -427,7 +484,7 @@ export function evaluateContract(contract: Contract, records: readonly TaskRecor
         : 'A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ') +
     `Attestation: ${contract.attests}`;
 
-  return { contract, tasks, summary, honesty };
+  return { contract, tasks, summary, honesty, stale, ...(staleReason ? { staleReason } : {}) };
 }
 
 function safeRe(pattern: string): RegExp {

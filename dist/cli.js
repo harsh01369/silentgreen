@@ -4038,6 +4038,9 @@ function checkBatch(records, opts = {}) {
   };
 }
 
+// src/aiwork/contract.ts
+import { createHash as createHash4 } from "node:crypto";
+
 // src/util/yaml.ts
 function scalar(raw) {
   const s = raw.trim();
@@ -4165,6 +4168,9 @@ function stripTrailingComment(line) {
 }
 
 // src/aiwork/contract.ts
+function promptSha(text) {
+  return createHash4("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+}
 var ATOM_KINDS = /* @__PURE__ */ new Set(["number", "money", "date", "email", "url", "identifier", "quote", "name"]);
 function parseContract(text, filename = "contract") {
   const isJson = filename.endsWith(".json") || text.trimStart().startsWith("{");
@@ -4198,6 +4204,15 @@ function parseContract(text, filename = "contract") {
     );
   } else if (/^todo\b/i.test(attests) || /your name, the date/i.test(attests)) {
     errors.push(`${filename}: "attests" is still the placeholder from the draft. Replace it with who is standing behind these rules and how they know.`);
+  }
+  let bound;
+  if (obj.bound_to && typeof obj.bound_to === "object" && !Array.isArray(obj.bound_to)) {
+    const bt = obj.bound_to;
+    if (typeof bt.prompt === "string" && typeof bt.prompt_sha === "string") {
+      bound = { prompt: bt.prompt, prompt_sha: bt.prompt_sha };
+    } else {
+      errors.push(`${filename}: "bound_to" needs both "prompt" (a path) and "prompt_sha" (the hash it was confirmed against)`);
+    }
   }
   const out = obj.output;
   const output = {};
@@ -4244,6 +4259,7 @@ function parseContract(text, filename = "contract") {
     pipeline,
     basis,
     attests,
+    ...bound ? { bound_to: bound } : {},
     ...Object.keys(output).length > 0 ? { output } : {},
     ...actions.length > 0 ? { actions } : {},
     ...obj.consistency === true ? { consistency: true } : {}
@@ -4346,12 +4362,21 @@ function worst2(verdicts) {
   if (verdicts.includes("unproven")) return "unproven";
   return "proven";
 }
-function evaluateContract(contract, records) {
+function evaluateContract(contract, records, opts = {}) {
   const tasks = [];
   const byClause = {};
   const tally = (c2, v) => {
     (byClause[c2] ??= { proven: 0, violated: 0, unproven: 0 })[v] += 1;
   };
+  let stale = false;
+  let staleReason;
+  if (contract.bound_to && opts.promptText !== void 0) {
+    if (promptSha(opts.promptText) !== contract.bound_to.prompt_sha) {
+      stale = true;
+      staleReason = `The prompt this contract was confirmed against (${contract.bound_to.prompt}) has changed. Its rules may no longer describe what the pipeline is for, so every result it would call proven is reported as unproven until someone re-confirms it against the new prompt.`;
+    }
+  }
+  const degrade = (v) => stale && v === "proven" ? "unproven" : v;
   for (const record of records) {
     const clauses = [];
     const { sources, basis: srcBasis } = groundingSourcesFor(record);
@@ -4435,8 +4460,9 @@ function evaluateContract(contract, records) {
         clauses.push({ clause: `internal consistency: ${bad.kind}`, verdict: "violated", detail: bad.summary, evidence: bad.evidence });
       }
     }
-    for (const co of clauses) tally(co.clause, co.verdict);
-    tasks.push({ id: record.id, verdict: worst2(clauses.map((c2) => c2.verdict)), clauses });
+    const degraded = stale ? clauses.map((co) => co.verdict === "proven" ? { ...co, verdict: degrade(co.verdict), detail: `${co.detail} (held, but reported unproven: the bound prompt changed)` } : co) : clauses;
+    for (const co of degraded) tally(co.clause, co.verdict);
+    tasks.push({ id: record.id, verdict: worst2(degraded.map((c2) => c2.verdict)), clauses: degraded });
   }
   const summary = {
     proven: tasks.filter((t) => t.verdict === "proven").length,
@@ -4444,8 +4470,8 @@ function evaluateContract(contract, records) {
     unproven: tasks.filter((t) => t.verdict === "unproven").length,
     byClause
   };
-  const honesty = `These verdicts are measured against a contract on a ${contract.basis} basis. ` + (contract.basis === "intent" ? "A proven result means the work matches what a person wrote down that it is for. " : contract.basis === "structure" ? "A proven result means the work is consistent with how the system is built, not that the design is what the business needed. " : "A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ") + `Attestation: ${contract.attests}`;
-  return { contract, tasks, summary, honesty };
+  const honesty = (stale ? `${staleReason} ` : "") + `These verdicts are measured against a contract on a ${contract.basis} basis. ` + (contract.basis === "intent" ? "A proven result means the work matches what a person wrote down that it is for. " : contract.basis === "structure" ? "A proven result means the work is consistent with how the system is built, not that the design is what the business needed. " : "A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ") + `Attestation: ${contract.attests}`;
+  return { contract, tasks, summary, honesty, stale, ...staleReason ? { staleReason } : {} };
 }
 function safeRe(pattern) {
   try {
@@ -4472,7 +4498,9 @@ function escapeRe(s) {
 
 // src/aiwork/contract-draft.ts
 var KINDS_OF_INTEREST = ["money", "date", "identifier", "email", "url"];
-function draftContract(records, pipeline = "pipeline") {
+function draftContract(records, pipelineOrOpts = "pipeline") {
+  const opts = typeof pipelineOrOpts === "string" ? { pipeline: pipelineOrOpts } : pipelineOrOpts;
+  const pipeline = opts.pipeline ?? "pipeline";
   const n = records.length;
   const withOutput = records.filter((r) => r.output.trim().length > 0);
   const anySources = records.some((r) => r.sources.length > 0);
@@ -4487,6 +4515,11 @@ function draftContract(records, pipeline = "pipeline") {
   lines.push(`pipeline: ${pipeline}`);
   lines.push("basis: intent");
   lines.push('attests: "TODO: your name, the date, and how you know these rules are what this pipeline is contracted to do"');
+  if (opts.prompt) {
+    lines.push("bound_to:");
+    lines.push(`  prompt: ${opts.prompt.path}`);
+    lines.push(`  prompt_sha: ${promptSha(opts.prompt.text)}   # regenerate this line whenever the prompt legitimately changes`);
+  }
   lines.push("");
   if (always.length > 0 || groundKinds.length > 0 || anySources) {
     lines.push("output:");
@@ -5137,7 +5170,7 @@ function arg(rest, flag) {
   const i = rest.indexOf(flag);
   return i >= 0 ? rest[i + 1] : void 0;
 }
-var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port", "--task"]);
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port", "--task", "--prompt"]);
 function positional(rest) {
   const out = [];
   for (let i = 0; i < rest.length; i++) {
@@ -5373,7 +5406,9 @@ ${c(C.red, "The contract could not be read:")}`);
       process.exitCode = 1;
       return;
     }
-    contractReport = evaluateContract(contract, records);
+    const promptPath = arg(rest, "--prompt");
+    const promptText = promptPath ? readFileSync3(promptPath, "utf8") : void 0;
+    contractReport = evaluateContract(contract, records, promptText !== void 0 ? { promptText } : {});
   }
   if (rest.includes("--json")) {
     const payload = {
@@ -5402,6 +5437,8 @@ ${c(C.red, "The contract could not be read:")}`);
           pipeline: contractReport.contract.pipeline,
           basis: contractReport.contract.basis,
           attests: contractReport.contract.attests,
+          stale: contractReport.stale,
+          staleReason: contractReport.staleReason,
           summary: contractReport.summary,
           honesty: contractReport.honesty,
           tasks: contractReport.tasks
@@ -5458,6 +5495,10 @@ ${c(C.red, "The contract could not be read:")}`);
   if (contractReport) {
     const s = contractReport.summary;
     rule(`Against the contract: ${contractReport.contract.pipeline}`);
+    if (contractReport.stale) {
+      console.log(`  ${c(C.yellow, "stale")}  ${contractReport.staleReason}
+`);
+    }
     console.log(`  proven    ${c(C.green, String(s.proven))}`);
     console.log(`  violated  ${c(C.red, String(s.violated))}`);
     console.log(`  unproven  ${c(C.yellow, String(s.unproven))}
@@ -5573,7 +5614,13 @@ live until you edit it and fill in the "attests" line.
     return;
   }
   const name = arg(rest, "--name") ?? "pipeline";
-  process.stdout.write(draftContract(records, name));
+  const promptPath = arg(rest, "--prompt");
+  process.stdout.write(
+    draftContract(records, {
+      pipeline: name,
+      ...promptPath ? { prompt: { path: promptPath, text: readFileSync3(promptPath, "utf8") } } : {}
+    })
+  );
 }
 function runEval(rest) {
   const verbose = rest.includes("--verbose") || rest.includes("-v");
@@ -6039,9 +6086,11 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
 
   check [files...]         verify a batch of AI work. Accepts globs. No setup.
     --contract FILE        also check the batch against a contract (YAML or JSON)
+    --prompt FILE          the current prompt, to detect drift from the contract
     --json                 machine-readable report on stdout
     --no-grounding         skip the groundedness check
   contract [files...]      draft a contract from a batch, for you to edit
+    --prompt FILE          bind the contract to this prompt file
   inspect [files...]       one task, side by side: answer, source, every atom
     --task ID              which task (default: the first with a fabrication)
   eval [--verbose]         score the checks against the labelled corpus

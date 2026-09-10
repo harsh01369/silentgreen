@@ -76,7 +76,7 @@ function arg(rest: readonly string[], flag: string): string | undefined {
 }
 
 /** Flags that take a following value, so it is not mistaken for a positional path. */
-const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port', '--task']);
+const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port', '--task', '--prompt']);
 
 function positional(rest: readonly string[]): string[] {
   const out: string[] = [];
@@ -348,7 +348,9 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
       process.exitCode = 1;
       return;
     }
-    contractReport = evaluateContract(contract, records);
+    const promptPath = arg(rest, '--prompt');
+    const promptText = promptPath ? readFileSync(promptPath, 'utf8') : undefined;
+    contractReport = evaluateContract(contract, records, promptText !== undefined ? { promptText } : {});
   }
 
   if (rest.includes('--json')) {
@@ -379,6 +381,8 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
               pipeline: contractReport.contract.pipeline,
               basis: contractReport.contract.basis,
               attests: contractReport.contract.attests,
+              stale: contractReport.stale,
+              staleReason: contractReport.staleReason,
               summary: contractReport.summary,
               honesty: contractReport.honesty,
               tasks: contractReport.tasks,
@@ -439,6 +443,9 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
   if (contractReport) {
     const s = contractReport.summary;
     rule(`Against the contract: ${contractReport.contract.pipeline}`);
+    if (contractReport.stale) {
+      console.log(`  ${c(C.yellow, 'stale')}  ${contractReport.staleReason}\n`);
+    }
     console.log(`  proven    ${c(C.green, String(s.proven))}`);
     console.log(`  violated  ${c(C.red, String(s.violated))}`);
     console.log(`  unproven  ${c(C.yellow, String(s.unproven))}\n`);
@@ -574,7 +581,13 @@ live until you edit it and fill in the "attests" line.
     return;
   }
   const name = arg(rest, '--name') ?? 'pipeline';
-  process.stdout.write(draftContract(records, name));
+  const promptPath = arg(rest, '--prompt');
+  process.stdout.write(
+    draftContract(records, {
+      pipeline: name,
+      ...(promptPath ? { prompt: { path: promptPath, text: readFileSync(promptPath, 'utf8') } } : {}),
+    }),
+  );
 }
 
 /* ------------------------------------------------------------------ eval -- */
@@ -1132,9 +1145,11 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
 
   check [files...]         verify a batch of AI work. Accepts globs. No setup.
     --contract FILE        also check the batch against a contract (YAML or JSON)
+    --prompt FILE          the current prompt, to detect drift from the contract
     --json                 machine-readable report on stdout
     --no-grounding         skip the groundedness check
   contract [files...]      draft a contract from a batch, for you to edit
+    --prompt FILE          bind the contract to this prompt file
   inspect [files...]       one task, side by side: answer, source, every atom
     --task ID              which task (default: the first with a fabrication)
   eval [--verbose]         score the checks against the labelled corpus

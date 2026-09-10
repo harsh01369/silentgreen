@@ -22,6 +22,12 @@ inputs:
     description: Skip the groundedness check (for batches with no source material).
     required: false
     default: 'false'
+  contract:
+    description: Path to a contract file to check the batch against.
+    required: false
+  prompt:
+    description: Path to the current prompt. If the contract is bound to it and it has changed, proven results become unproven.
+    required: false
 
 outputs:
   problems:
@@ -47,12 +53,16 @@ runs:
         SG_FAIL: ${{ inputs.fail-on-problem }}
         SG_COMMENT: ${{ inputs.comment }}
         SG_NOGROUND: ${{ inputs.no-grounding }}
+        SG_CONTRACT: ${{ inputs.contract }}
+        SG_PROMPT: ${{ inputs.prompt }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
 
         args=("$SG_FILE" --json)
         [ "$SG_NOGROUND" = "true" ] && args+=(--no-grounding)
+        [ -n "$SG_CONTRACT" ] && args+=(--contract "$SG_CONTRACT")
+        [ -n "$SG_PROMPT" ] && args+=(--prompt "$SG_PROMPT")
 
         report="$RUNNER_TEMP/silentgreen-report.json"
         set +e
@@ -96,6 +106,18 @@ runs:
           fi
           jq -r '.signals[]? | "- _across the batch:_ " + .summary' "$report"
           echo
+          if jq -e '.contract' "$report" > /dev/null 2>&1; then
+            echo "**Contract: $(jq -r '.contract.pipeline' "$report")**"
+            echo
+            if [ "$(jq -r '.contract.stale' "$report")" = "true" ]; then
+              echo "> :warning: $(jq -r '.contract.staleReason' "$report")"
+              echo
+            fi
+            echo "proven $(jq -r '.contract.summary.proven' "$report") · violated $(jq -r '.contract.summary.violated' "$report") · unproven $(jq -r '.contract.summary.unproven' "$report")"
+            echo
+            jq -r '.contract.tasks[]? | select(.verdict == "violated") | "- `" + .id + "` — " + (.clauses[] | select(.verdict == "violated") | .clause + ": " + .detail)' "$report" | head -20
+            echo
+          fi
           jq -r '"> " + .caveat' "$report"
         } > "$RUNNER_TEMP/sg-comment.md"
 
@@ -110,7 +132,8 @@ runs:
             --body-file "$RUNNER_TEMP/sg-comment.md" || echo "could not post comment"
         fi
 
-        if [ "$SG_FAIL" = "true" ] && [ "$problems" -gt 0 ]; then
-          echo "::error::silentgreen flagged $problems of $total answers"
+        contract_violated=$(jq -r '.contract.summary.violated // 0' "$report")
+        if [ "$SG_FAIL" = "true" ] && { [ "$problems" -gt 0 ] || [ "$contract_violated" -gt 0 ]; }; then
+          echo "::error::silentgreen flagged $problems of $total answers, plus $contract_violated contract violation(s)"
           exit 1
         fi

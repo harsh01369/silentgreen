@@ -17,7 +17,7 @@ export { checkConformance, type Malformed, type MalformedKind } from './verify/c
 export { checkAssociation, type Misassociation } from './verify/association';
 export { inspectTask, type TaskInspection, type AnswerSegment, type SegmentKind, type SourceHighlight, type QuoteFinding, } from './verify/inspect';
 export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
-export { parseContract, evaluateContract, type Contract, type ContractBasis, type ContractReport, type ContractTaskResult, type ClauseOutcome, type ClauseVerdict, type MustContain, type ActionRule, } from './aiwork/contract';
+export { parseContract, evaluateContract, promptSha, type Contract, type ContractBasis, type ContractReport, type ContractTaskResult, type ClauseOutcome, type ClauseVerdict, type MustContain, type ActionRule, type EvaluateOptions, } from './aiwork/contract';
 export { draftContract } from './aiwork/contract-draft';
 export { parseYaml, type YamlValue } from './util/yaml';
 export { demoTasks } from './aiwork/demo';

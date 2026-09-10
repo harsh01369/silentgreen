@@ -129,6 +129,20 @@ Every clause is a deterministic comparison and returns one of the three verdicts
 the answer claims an action but no actions were recorded, the clause is `unproven`, not
 `violated`, because a gap in the evidence is not proof of a lie.
 
+**A contract goes stale rather than rotting.** Bind it to the prompt it was written for:
+
+```yaml
+bound_to:
+  prompt: prompts/billing-agent.txt
+  prompt_sha: 9f2c...        # silentgreen contract --prompt prompts/billing-agent.txt writes this
+```
+
+Then `silentgreen check tasks.jsonl --contract billing.sg.yaml --prompt prompts/billing-agent.txt`.
+When the prompt has changed and the hash no longer matches, every result the contract
+would call `proven` is reported `unproven` with a re-confirm message, because a green
+result about a prompt that no longer exists is exactly what this tool refuses to give.
+The GitHub Action takes `contract` and `prompt` inputs and turns this into a PR comment.
+
 ### What the worked example finds
 
 Twenty answers. Every one was recorded as a completed task, and every one reads as helpful.

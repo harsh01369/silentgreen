@@ -56,6 +56,7 @@ export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSig
 export {
   parseContract,
   evaluateContract,
+  promptSha,
   type Contract,
   type ContractBasis,
   type ContractReport,
@@ -64,6 +65,7 @@ export {
   type ClauseVerdict,
   type MustContain,
   type ActionRule,
+  type EvaluateOptions,
 } from './aiwork/contract';
 export { draftContract } from './aiwork/contract-draft';
 export { parseYaml, type YamlValue } from './util/yaml';

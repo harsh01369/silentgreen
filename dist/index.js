@@ -1544,6 +1544,9 @@ function inspectTask(record) {
   };
 }
 
+// src/aiwork/contract.ts
+import { createHash as createHash2 } from "node:crypto";
+
 // src/util/yaml.ts
 function scalar(raw) {
   const s = raw.trim();
@@ -1671,6 +1674,9 @@ function stripTrailingComment(line) {
 }
 
 // src/aiwork/contract.ts
+function promptSha(text) {
+  return createHash2("sha256").update(text.replace(/\s+/g, " ").trim()).digest("hex");
+}
 var ATOM_KINDS = /* @__PURE__ */ new Set(["number", "money", "date", "email", "url", "identifier", "quote", "name"]);
 function parseContract(text, filename = "contract") {
   const isJson = filename.endsWith(".json") || text.trimStart().startsWith("{");
@@ -1704,6 +1710,15 @@ function parseContract(text, filename = "contract") {
     );
   } else if (/^todo\b/i.test(attests) || /your name, the date/i.test(attests)) {
     errors.push(`${filename}: "attests" is still the placeholder from the draft. Replace it with who is standing behind these rules and how they know.`);
+  }
+  let bound;
+  if (obj.bound_to && typeof obj.bound_to === "object" && !Array.isArray(obj.bound_to)) {
+    const bt = obj.bound_to;
+    if (typeof bt.prompt === "string" && typeof bt.prompt_sha === "string") {
+      bound = { prompt: bt.prompt, prompt_sha: bt.prompt_sha };
+    } else {
+      errors.push(`${filename}: "bound_to" needs both "prompt" (a path) and "prompt_sha" (the hash it was confirmed against)`);
+    }
   }
   const out = obj.output;
   const output = {};
@@ -1750,6 +1765,7 @@ function parseContract(text, filename = "contract") {
     pipeline,
     basis,
     attests,
+    ...bound ? { bound_to: bound } : {},
     ...Object.keys(output).length > 0 ? { output } : {},
     ...actions.length > 0 ? { actions } : {},
     ...obj.consistency === true ? { consistency: true } : {}
@@ -1852,12 +1868,21 @@ function worst(verdicts) {
   if (verdicts.includes("unproven")) return "unproven";
   return "proven";
 }
-function evaluateContract(contract, records) {
+function evaluateContract(contract, records, opts = {}) {
   const tasks = [];
   const byClause = {};
   const tally = (c, v) => {
     (byClause[c] ??= { proven: 0, violated: 0, unproven: 0 })[v] += 1;
   };
+  let stale = false;
+  let staleReason;
+  if (contract.bound_to && opts.promptText !== void 0) {
+    if (promptSha(opts.promptText) !== contract.bound_to.prompt_sha) {
+      stale = true;
+      staleReason = `The prompt this contract was confirmed against (${contract.bound_to.prompt}) has changed. Its rules may no longer describe what the pipeline is for, so every result it would call proven is reported as unproven until someone re-confirms it against the new prompt.`;
+    }
+  }
+  const degrade = (v) => stale && v === "proven" ? "unproven" : v;
   for (const record of records) {
     const clauses = [];
     const { sources, basis: srcBasis } = groundingSourcesFor(record);
@@ -1941,8 +1966,9 @@ function evaluateContract(contract, records) {
         clauses.push({ clause: `internal consistency: ${bad.kind}`, verdict: "violated", detail: bad.summary, evidence: bad.evidence });
       }
     }
-    for (const co of clauses) tally(co.clause, co.verdict);
-    tasks.push({ id: record.id, verdict: worst(clauses.map((c) => c.verdict)), clauses });
+    const degraded = stale ? clauses.map((co) => co.verdict === "proven" ? { ...co, verdict: degrade(co.verdict), detail: `${co.detail} (held, but reported unproven: the bound prompt changed)` } : co) : clauses;
+    for (const co of degraded) tally(co.clause, co.verdict);
+    tasks.push({ id: record.id, verdict: worst(degraded.map((c) => c.verdict)), clauses: degraded });
   }
   const summary = {
     proven: tasks.filter((t) => t.verdict === "proven").length,
@@ -1950,8 +1976,8 @@ function evaluateContract(contract, records) {
     unproven: tasks.filter((t) => t.verdict === "unproven").length,
     byClause
   };
-  const honesty = `These verdicts are measured against a contract on a ${contract.basis} basis. ` + (contract.basis === "intent" ? "A proven result means the work matches what a person wrote down that it is for. " : contract.basis === "structure" ? "A proven result means the work is consistent with how the system is built, not that the design is what the business needed. " : "A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ") + `Attestation: ${contract.attests}`;
-  return { contract, tasks, summary, honesty };
+  const honesty = (stale ? `${staleReason} ` : "") + `These verdicts are measured against a contract on a ${contract.basis} basis. ` + (contract.basis === "intent" ? "A proven result means the work matches what a person wrote down that it is for. " : contract.basis === "structure" ? "A proven result means the work is consistent with how the system is built, not that the design is what the business needed. " : "A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ") + `Attestation: ${contract.attests}`;
+  return { contract, tasks, summary, honesty, stale, ...staleReason ? { staleReason } : {} };
 }
 function safeRe(pattern) {
   try {
@@ -1978,7 +2004,9 @@ function escapeRe(s) {
 
 // src/aiwork/contract-draft.ts
 var KINDS_OF_INTEREST = ["money", "date", "identifier", "email", "url"];
-function draftContract(records, pipeline = "pipeline") {
+function draftContract(records, pipelineOrOpts = "pipeline") {
+  const opts = typeof pipelineOrOpts === "string" ? { pipeline: pipelineOrOpts } : pipelineOrOpts;
+  const pipeline = opts.pipeline ?? "pipeline";
   const n = records.length;
   const withOutput = records.filter((r) => r.output.trim().length > 0);
   const anySources = records.some((r) => r.sources.length > 0);
@@ -1993,6 +2021,11 @@ function draftContract(records, pipeline = "pipeline") {
   lines.push(`pipeline: ${pipeline}`);
   lines.push("basis: intent");
   lines.push('attests: "TODO: your name, the date, and how you know these rules are what this pipeline is contracted to do"');
+  if (opts.prompt) {
+    lines.push("bound_to:");
+    lines.push(`  prompt: ${opts.prompt.path}`);
+    lines.push(`  prompt_sha: ${promptSha(opts.prompt.text)}   # regenerate this line whenever the prompt legitimately changes`);
+  }
   lines.push("");
   if (always.length > 0 || groundKinds.length > 0 || anySources) {
     lines.push("output:");
@@ -2552,7 +2585,7 @@ function builtinBatches() {
 }
 
 // src/ledger/chain.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { appendFileSync as appendFileSync2, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 var GENESIS_PREV = "0".repeat(64);
@@ -2575,7 +2608,7 @@ function hashEntry(e) {
     canonical(e.payload),
     e.prevHash
   ].join(SEP);
-  return createHash2("sha256").update(material).digest("hex");
+  return createHash3("sha256").update(material).digest("hex");
 }
 var Ledger = class {
   constructor(path) {
@@ -2825,6 +2858,7 @@ export {
   parseContract,
   parseTaskRecords,
   parseYaml,
+  promptSha,
   scoreBatch,
   verifyChain
 };

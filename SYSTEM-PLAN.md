@@ -517,7 +517,16 @@ then the marketing site. The 3D frontend is a parallel track with its own design
   three verdicts. `silentgreen check --contract billing.sg.yaml`.
 - [done] Inference of a first-draft contract from a batch: `silentgreen contract
   tasks.jsonl`. Proposes only what the batch already does consistently.
-- [open] Structure-contract inference and diffing.
+- [done] Prompt binding and drift. A contract can carry `bound_to: { prompt,
+  prompt_sha }`. `silentgreen check --contract c.yaml --prompt system.txt`
+  hashes the current prompt (whitespace-insensitive, word-sensitive) and, if it
+  no longer matches, degrades every result the contract would call `proven` to
+  `unproven` with a re-confirm message. `silentgreen contract --prompt
+  system.txt` writes the binding. The GitHub Action takes `contract` and
+  `prompt` inputs and fails the job on a contract violation or comments the
+  staleness, which is the "your change made this stale" CI annotation.
+- [open] Structure-contract inference for workflows (the n8n graph side; the
+  prompt side above is done).
 - [open] The review queue UI and the server-side attestation validation.
 - [open] The alert state machine and the Slack integration.
 

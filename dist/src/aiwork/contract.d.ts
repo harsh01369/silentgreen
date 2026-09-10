@@ -36,6 +36,18 @@ export interface Contract {
     readonly pipeline: string;
     readonly basis: ContractBasis;
     readonly attests: string;
+    /**
+     * The prompt or instruction file this contract was confirmed against, and a
+     * hash of it at that moment. When `check` is given the current prompt and it
+     * no longer matches, every result this contract would call `proven` becomes
+     * `unproven`: the thing the rules were written for has changed underneath
+     * them, and a green result about a prompt that no longer exists is exactly
+     * what this tool refuses to give.
+     */
+    readonly bound_to?: {
+        readonly prompt: string;
+        readonly prompt_sha: string;
+    };
     readonly output?: {
         readonly must_contain?: readonly MustContain[];
         readonly must_not_contain?: readonly MustContain[];
@@ -47,6 +59,7 @@ export interface Contract {
     readonly actions?: readonly ActionRule[];
     readonly consistency?: boolean;
 }
+export declare function promptSha(text: string): string;
 export interface ClauseOutcome {
     readonly clause: string;
     readonly verdict: ClauseVerdict;
@@ -73,9 +86,16 @@ export interface ContractReport {
     };
     /** The coverage-honesty sentence for this contract. */
     readonly honesty: string;
+    /** True when the bound prompt has changed since the contract was confirmed. */
+    readonly stale: boolean;
+    readonly staleReason?: string;
+}
+export interface EvaluateOptions {
+    /** The current text of the prompt the contract is `bound_to`, to check for drift. */
+    readonly promptText?: string;
 }
 export declare function parseContract(text: string, filename?: string): {
     contract?: Contract;
     errors: readonly string[];
 };
-export declare function evaluateContract(contract: Contract, records: readonly TaskRecord[]): ContractReport;
+export declare function evaluateContract(contract: Contract, records: readonly TaskRecord[], opts?: EvaluateOptions): ContractReport;

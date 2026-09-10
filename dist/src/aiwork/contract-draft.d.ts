@@ -7,4 +7,12 @@
  * cannot be inferred is who is willing to stand behind the rules.
  */
 import type { TaskRecord } from './record';
-export declare function draftContract(records: readonly TaskRecord[], pipeline?: string): string;
+export interface DraftOptions {
+    readonly pipeline?: string;
+    /** Path and text of a prompt to bind the contract to. */
+    readonly prompt?: {
+        readonly path: string;
+        readonly text: string;
+    };
+}
+export declare function draftContract(records: readonly TaskRecord[], pipelineOrOpts?: string | DraftOptions): string;

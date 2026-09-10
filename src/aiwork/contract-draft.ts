@@ -8,11 +8,20 @@
  */
 
 import { extractAtoms, type AtomKind } from '../verify/grounding';
+import { promptSha } from './contract';
 import type { TaskRecord } from './record';
 
 const KINDS_OF_INTEREST: readonly AtomKind[] = ['money', 'date', 'identifier', 'email', 'url'];
 
-export function draftContract(records: readonly TaskRecord[], pipeline = 'pipeline'): string {
+export interface DraftOptions {
+  readonly pipeline?: string;
+  /** Path and text of a prompt to bind the contract to. */
+  readonly prompt?: { readonly path: string; readonly text: string };
+}
+
+export function draftContract(records: readonly TaskRecord[], pipelineOrOpts: string | DraftOptions = 'pipeline'): string {
+  const opts: DraftOptions = typeof pipelineOrOpts === 'string' ? { pipeline: pipelineOrOpts } : pipelineOrOpts;
+  const pipeline = opts.pipeline ?? 'pipeline';
   const n = records.length;
   const withOutput = records.filter((r) => r.output.trim().length > 0);
   const anySources = records.some((r) => r.sources.length > 0);
@@ -31,6 +40,11 @@ export function draftContract(records: readonly TaskRecord[], pipeline = 'pipeli
   lines.push(`pipeline: ${pipeline}`);
   lines.push('basis: intent');
   lines.push('attests: "TODO: your name, the date, and how you know these rules are what this pipeline is contracted to do"');
+  if (opts.prompt) {
+    lines.push('bound_to:');
+    lines.push(`  prompt: ${opts.prompt.path}`);
+    lines.push(`  prompt_sha: ${promptSha(opts.prompt.text)}   # regenerate this line whenever the prompt legitimately changes`);
+  }
   lines.push('');
 
   if (always.length > 0 || groundKinds.length > 0 || anySources) {
