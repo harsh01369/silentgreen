@@ -54,11 +54,80 @@ these things something different:
 rather than silently dropped, because a parser that quietly discards a third of the file and
 then reports no problems would be an unusually poor joke in this particular codebase.
 
-**LangSmith and Langfuse exports work as they are.** A LangChain run with `inputs` and
-`outputs` objects, generations nested two arrays deep, and the retrieved documents sitting
-in a child retriever run is unpacked automatically. So is a Langfuse trace with singular
-`input` / `output` and the retrieval step as an observation. Dump your runs to JSONL and
-pass the file. If a trace has no recoverable answer it is reported, never dropped.
+**LangSmith, Langfuse and OpenTelemetry exports work as they are.** A LangChain run with
+`inputs` and `outputs` objects, generations nested two arrays deep, and the retrieved
+documents sitting in a child retriever run is unpacked automatically. So is a Langfuse trace
+with singular `input` / `output` and the retrieval step as an observation. So is an
+OpenTelemetry GenAI span, in any of the key styles the convention has churned through
+(`gen_ai.input.messages` / `gen_ai.output.messages`, the deprecated `gen_ai.prompt` /
+`gen_ai.completion`, the OpenLLMetry `gen_ai.prompt.0.content` flattening, the
+OpenInference `llm.input_messages.0.message.content` flattening, Traceloop entity
+input/output), which between them covers OpenLLMetry / Traceloop, Arize / Phoenix, MLflow
+and more. Dump your runs to JSONL and pass the file. If a trace has no recoverable answer
+it is reported, never dropped.
+
+**Or record as you go.** Instead of exporting after the fact, wrap the call your agent
+already makes:
+
+```ts
+import { createRecorder } from 'silentgreen/record';
+
+const sg = createRecorder({ sink: 'silentgreen.jsonl' });     // or { url, apiKey }
+
+const answer = await sg.task({ input: question }, async (t) => {
+  const docs = await retrieve(question);
+  t.source(docs.map((d) => d.text));
+  const out = await llm(question, docs);
+  t.action({ kind: 'email.sent', target: customer.email });   // optional
+  return out;                                                  // captured as the output
+});
+
+await sg.flush();
+```
+
+No dependencies, and the body's return value passes straight through, so the wrapper is
+transparent.
+
+### A contract, when a linter is not enough
+
+`check` needs nothing configured. A contract is the first thing you write down: a short file
+that says what the pipeline is actually for, so the verdict is about the job and not only
+the text.
+
+```bash
+silentgreen contract tasks.jsonl > billing.sg.yaml   # draft one from a batch
+silentgreen check tasks.jsonl --contract billing.sg.yaml
+```
+
+```yaml
+pipeline: billing-support-agent
+basis: intent
+attests: "Harsh, 2026-09, these rules are what the agent is contracted to do"
+
+output:
+  must_contain:
+    - kind: money        # every answer quotes an amount
+    - kind: date         # and a due date
+  must_not_contain:
+    - pattern: "refund|credit note"
+  grounded:
+    kinds: [money, date, identifier, email, url]
+  predicates:
+    - "money <= source.money.max"       # never quote more than the source shows
+    - "date within 90 days"
+    - "currency == source.currency"
+
+actions:
+  - when: "emailed|sent you the invoice"
+    require:
+      kind: email.sent
+      target_matches: source.email      # and it went to the address in the source
+```
+
+Every clause is a deterministic comparison and returns one of the three verdicts. The
+`attests` line is mandatory and is printed next to every result the contract produces. If
+the answer claims an action but no actions were recorded, the clause is `unproven`, not
+`violated`, because a gap in the evidence is not proof of a lie.
 
 ### What the worked example finds
 
@@ -99,11 +168,25 @@ metric that gates a change is not accuracy, it is the count of faithful answers 
 flagged, which must be zero. A change that improves recall but flags one correct answer
 fails.
 
-The corpus today is entirely synthetic. It was written to pin down intended behaviour,
-including adversarial cases (a transposed figure, a date written day-first, a quotation
-repunctuated, a name that opens a sentence), so the numbers say the engine behaves the way
-its author meant and nothing stronger. They become evidence when real, third-party batches
-replace the fixtures. That swap is tracked as the first item in [SYSTEM-PLAN.md](SYSTEM-PLAN.md).
+| batch | tasks | precision | recall | false positives |
+| --- | --- | --- | --- | --- |
+| billing-support | 20 | 1.00 | 1.00 | 0 |
+| faithful-adversarial | 11 | 1.00 | 1.00 | 0 |
+| fabrication-adversarial | 9 | 1.00 | 1.00 | 0 |
+| degenerate-and-deferral | 6 | 1.00 | 1.00 | 0 |
+| self-contradiction | 7 | 1.00 | 1.00 | 0 |
+| structured-output | 5 | 1.00 | 1.00 | 0 |
+| inconclusive | 3 | 1.00 | 1.00 | 0 |
+| **overall** | **61** | **1.000** | **1.000** | **0** |
+
+**This number is worth very little on its own, and the plan says so.** The corpus is
+entirely synthetic. It was written to pin down intended behaviour, including adversarial
+cases (a transposed figure, a date written day-first, a quotation repunctuated, a name that
+opens a sentence, a currency named as a code, an amount within a rounding of the real one),
+so 1.000 means the engine behaves the way its author meant and nothing stronger. It becomes
+evidence when real, third-party batches replace the fixtures. That swap is tracked as the
+first item in [SYSTEM-PLAN.md](SYSTEM-PLAN.md), and until it happens the honest reading of
+this table is "no known false positive", not "no false positives".
 
 ---
 

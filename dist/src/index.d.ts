@@ -15,6 +15,9 @@ export { checkGrounding, extractAtoms, type GroundingResult, type Atom, type Ato
 export { checkConsistency, type Inconsistency, type InconsistencyKind } from './verify/consistency';
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
 export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
+export { parseContract, evaluateContract, type Contract, type ContractBasis, type ContractReport, type ContractTaskResult, type ClauseOutcome, type ClauseVerdict, type MustContain, type ActionRule, } from './aiwork/contract';
+export { draftContract } from './aiwork/contract-draft';
+export { parseYaml, type YamlValue } from './util/yaml';
 export { demoTasks } from './aiwork/demo';
 export { scoreBatch, gate, DEFAULT_GATE, type Scoreboard, type LabelledBatch, type TaskLabel, type GateThresholds, type GateResult, } from './eval/score';
 export { builtinBatches } from './eval/corpus';

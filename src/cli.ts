@@ -30,6 +30,8 @@ import { decideAlerts, worstPerAssertion } from './alert/state';
 import { channelsFromEnv, send, renderText, type Channel, type MessageContext } from './alert/notify';
 import { parseTaskRecords, type TaskRecord } from './aiwork/record';
 import { checkBatch } from './aiwork/check';
+import { parseContract, evaluateContract, type ContractReport } from './aiwork/contract';
+import { draftContract } from './aiwork/contract-draft';
 import { demoTasks } from './aiwork/demo';
 import { builtinBatches } from './eval/corpus';
 import { scoreBatch, gate, DEFAULT_GATE } from './eval/score';
@@ -70,6 +72,22 @@ function rule(label = ''): void {
 function arg(rest: readonly string[], flag: string): string | undefined {
   const i = rest.indexOf(flag);
   return i >= 0 ? rest[i + 1] : undefined;
+}
+
+/** Flags that take a following value, so it is not mistaken for a positional path. */
+const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port']);
+
+function positional(rest: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a.startsWith('-')) {
+      if (VALUE_FLAGS.has(a)) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
 }
 
 
@@ -315,6 +333,23 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     skipGrounding: rest.includes('--no-grounding'),
   });
 
+  let contractReport: ContractReport | undefined;
+  const contractPath = arg(rest, '--contract');
+  if (contractPath) {
+    const { contract, errors } = parseContract(readFileSync(contractPath, 'utf8'), contractPath);
+    if (errors.length > 0 || !contract) {
+      if (!jsonMode) {
+        console.error(`\n${c(C.red, 'The contract could not be read:')}`);
+        for (const e of errors) console.error(`  ${e}`);
+      } else {
+        process.stdout.write(JSON.stringify({ tool: 'silentgreen', contractErrors: errors }, null, 2) + '\n');
+      }
+      process.exitCode = 1;
+      return;
+    }
+    contractReport = evaluateContract(contract, records);
+  }
+
   if (rest.includes('--json')) {
     const payload = {
       tool: 'silentgreen',
@@ -337,9 +372,21 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
         problems: r.problems,
       })),
       caveat: summary.caveat,
+      ...(contractReport
+        ? {
+            contract: {
+              pipeline: contractReport.contract.pipeline,
+              basis: contractReport.contract.basis,
+              attests: contractReport.contract.attests,
+              summary: contractReport.summary,
+              honesty: contractReport.honesty,
+              tasks: contractReport.tasks,
+            },
+          }
+        : {}),
     };
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
-    if (summary.problematic > 0) process.exitCode = 1;
+    if (summary.problematic > 0 || (contractReport && contractReport.summary.violated > 0)) process.exitCode = 1;
     return;
   }
 
@@ -387,6 +434,25 @@ Field names are flexible: output/response/answer/completion, sources/context/doc
     }
   }
 
+  if (contractReport) {
+    const s = contractReport.summary;
+    rule(`Against the contract: ${contractReport.contract.pipeline}`);
+    console.log(`  proven    ${c(C.green, String(s.proven))}`);
+    console.log(`  violated  ${c(C.red, String(s.violated))}`);
+    console.log(`  unproven  ${c(C.yellow, String(s.unproven))}\n`);
+    const broken = contractReport.tasks.filter((t) => t.verdict === 'violated');
+    for (const t of broken.slice(0, 12)) {
+      console.log(`  ${c(C.red, 'x')} ${c(C.bold, t.id)}`);
+      for (const cl of t.clauses.filter((x) => x.verdict === 'violated').slice(0, 4)) {
+        console.log(`    ${cl.clause}: ${cl.detail}`);
+        if (cl.evidence) console.log(c(C.dim, `      ${String(cl.evidence).slice(0, 120)}`));
+      }
+      console.log('');
+    }
+    if (broken.length > 12) console.log(c(C.dim, `  ...and ${broken.length - 12} more.\n`));
+    console.log(c(C.dim, `  ${contractReport.honesty}`));
+  }
+
   rule('What this did not check');
   console.log(`  ${summary.caveat}`);
 
@@ -401,6 +467,35 @@ ${c(C.dim, 'One JSON object per line. Field names are flexible:')}
   }
 
   if (summary.problematic > 0) process.exitCode = 1;
+}
+
+/* -------------------------------------------------------------- contract -- */
+
+async function runContract(paths: readonly string[], rest: readonly string[]): Promise<void> {
+  const files = paths.filter((p) => !p.startsWith('-'));
+  if (files.length === 0) {
+    console.error(`
+${c(C.bold, 'silentgreen contract')} ${c(C.dim, 'draft a contract from a batch')}
+
+  silentgreen contract tasks.jsonl > billing.sg.yaml
+
+Reads a batch, finds what every answer already does consistently, and writes it
+out as contract rules for you to keep, cut or tighten. Nothing it writes is
+live until you edit it and fill in the "attests" line.
+`);
+    process.exitCode = 1;
+    return;
+  }
+  const expanded = [...new Set(files.flatMap(expandGlob))];
+  const records: TaskRecord[] = [];
+  for (const f of expanded) records.push(...parseTaskRecords(readFileSync(f, 'utf8')).records);
+  if (records.length === 0) {
+    console.error('No readable tasks in those files.');
+    process.exitCode = 1;
+    return;
+  }
+  const name = arg(rest, '--name') ?? 'pipeline';
+  process.stdout.write(draftContract(records, name));
 }
 
 /* ------------------------------------------------------------------ eval -- */
@@ -917,7 +1012,9 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'check':
-      return runCheck(rest.filter((r) => !r.startsWith('--')), rest);
+      return runCheck(positional(rest), rest);
+    case 'contract':
+      return runContract(positional(rest), rest);
     case 'eval':
       return runEval(rest);
     case 'demo':
@@ -953,6 +1050,10 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
       console.log(`silentgreen
 
   check [files...]         verify a batch of AI work. Accepts globs. No setup.
+    --contract FILE        also check the batch against a contract (YAML or JSON)
+    --json                 machine-readable report on stdout
+    --no-grounding         skip the groundedness check
+  contract [files...]      draft a contract from a batch, for you to edit
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store

@@ -108,7 +108,10 @@ function normaliseText(s) {
 var PATTERNS = [
   { kind: "email", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { kind: "url", re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
-  { kind: "money", re: /(?:[$£€¥]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR))\b/g },
+  {
+    kind: "money",
+    re: /(?:[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,]*(?:\.\d+)?)/g
+  },
   { kind: "date", re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
   // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
   // be consumed in one match, or the tail is left behind and reported as a

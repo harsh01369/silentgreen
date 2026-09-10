@@ -43,6 +43,22 @@ export { checkConsistency, type Inconsistency, type InconsistencyKind } from './
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
 export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
 
+// The contract layer (Tier 2): rules a human wrote down, checked deterministically.
+export {
+  parseContract,
+  evaluateContract,
+  type Contract,
+  type ContractBasis,
+  type ContractReport,
+  type ContractTaskResult,
+  type ClauseOutcome,
+  type ClauseVerdict,
+  type MustContain,
+  type ActionRule,
+} from './aiwork/contract';
+export { draftContract } from './aiwork/contract-draft';
+export { parseYaml, type YamlValue } from './util/yaml';
+
 // The worked example.
 export { demoTasks } from './aiwork/demo';
 

@@ -405,14 +405,27 @@ real batches that neither the builder nor a fixture author wrote.
   JSON was asked for, a ragged markdown table. Stays quiet on ordinary prose that happens
   to contain a brace.
 - [done] Harden extraction: reformatted dates, quotations matched whole, numbers
-  written as words ("two thousand pounds" equals 2000, both directions), and currency
-  symbol vs code (both reduce to the same figure). Remaining niceties: European decimal
-  notation (deliberately skipped as ambiguous) and Ltd/Limited-style name fuzzing.
-- [open] Real reporting from `check`, leading with the coverage-honesty sentence.
-- [done] Importers: JSONL, JSON array, CSV (RFC 4180, flexible column names), and LangSmith and Langfuse trace shapes unpacked automatically.
+  written as words ("two thousand pounds" equals 2000, both directions), currency
+  symbol vs code vs code-prefix (all reduce to the same figure), company-form
+  suffixes treated as interchangeable (Ltd / Limited / GmbH / dropped), and a
+  near-miss figure named in the finding when the answer looks like a transposition.
+  Still skipped: European decimal notation (ambiguous).
+- [done] Batch-shape signals (Tier 1): deferral rate, refusal rate, empty rate,
+  collapse onto one canned reply, atom drought, lone length outlier. Computed from
+  the batch, never history or a model. A signal is a note, never a per-task
+  accusation and never a CI failure on its own.
+- [done] The SDK recorder (`silentgreen/record`): a transparent wrapper around an
+  agent or chain call that captures input, sources, output and actions as they
+  happen, then writes JSONL or POSTs a batch. No dependencies.
+- [done] `check --json`: machine-readable report. The GitHub Action consumes it
+  instead of grepping text, and exposes counts as step outputs.
+- [done] Importers: JSONL, JSON array, CSV (RFC 4180, flexible column names),
+  LangSmith and Langfuse trace shapes, and the OpenTelemetry GenAI span shape
+  (covers OpenLLMetry / Traceloop, Arize / OpenInference, MLflow and others).
 - [done] GitHub Action (`action.yml`) that runs `check` over a path or glob and comments
   the result on the PR, failing the job when an answer is flagged. `check` now takes
   multiple paths and expands `*`, `?` and `**`.
+- [open] Real reporting from `check`, leading with the coverage-honesty sentence.
 - [open] Publish precision and recall on the golden corpus in the README.
 
 ### Phase 2: the hosted free tier
@@ -478,11 +491,21 @@ then the marketing site. The 3D frontend is a parallel track with its own design
 
 ### Phase 3: the review queue and contracts
 
-- The contract DSL, loader and validator.
-- Inference of a first-draft contract from a batch.
-- Structure-contract inference and diffing.
-- The review queue UI and the server-side attestation validation.
-- The alert state machine and the Slack integration.
+- [done] The contract DSL, loader and validator. Small YAML (or JSON), read by a
+  dependency-free restricted-subset parser. `basis` and a substantive `attests`
+  line are mandatory; the draft placeholder is refused. Clause families:
+  required fields, forbidden patterns, groundedness with chosen kinds, value
+  predicates (`money <= source.money.max`, `date within 90 days`,
+  `currency == source.currency`), and required actions (the answer says it
+  emailed the invoice, so an `email.sent` action to the source address must be
+  recorded, or it is `unproven` when no actions were captured and `violated`
+  when actions were captured and none match). Every clause returns one of the
+  three verdicts. `silentgreen check --contract billing.sg.yaml`.
+- [done] Inference of a first-draft contract from a batch: `silentgreen contract
+  tasks.jsonl`. Proposes only what the batch already does consistently.
+- [open] Structure-contract inference and diffing.
+- [open] The review queue UI and the server-side attestation validation.
+- [open] The alert state machine and the Slack integration.
 
 ### Phase 4: automation pipelines
 

@@ -511,7 +511,10 @@ function normaliseText(s) {
 var PATTERNS = [
   { kind: "email", re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g },
   { kind: "url", re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
-  { kind: "money", re: /(?:[$£€¥]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR))\b/g },
+  {
+    kind: "money",
+    re: /(?:[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,]*(?:\.\d+)?)/g
+  },
   { kind: "date", re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
   // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
   // be consumed in one match, or the tail is left behind and reported as a
@@ -1407,6 +1410,478 @@ function createRecorder(options = {}) {
   };
 }
 
+// src/util/yaml.ts
+function scalar(raw) {
+  const s = raw.trim();
+  if (s === "" || s === "~" || s === "null") return null;
+  if (s === "true") return true;
+  if (s === "false") return false;
+  if (s.startsWith("[") && s.endsWith("]")) {
+    const body = s.slice(1, -1).trim();
+    if (body === "") return [];
+    if (!body.includes("[") && !body.includes("{")) return body.split(",").map((p) => scalar(p.trim()));
+  }
+  if (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'")) {
+    const inner = s.slice(1, -1);
+    return s[0] === '"' ? inner.replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\") : inner.replace(/''/g, "'");
+  }
+  if (/^-?\d+$/.test(s)) return Number(s);
+  if (/^-?\d*\.\d+$/.test(s)) return Number(s);
+  return s;
+}
+function parseYaml(text) {
+  const errors = [];
+  const raw = text.replace(/\r\n?/g, "\n").split("\n");
+  const lines = [];
+  for (let i = 0; i < raw.length; i++) {
+    const r = raw[i];
+    if (r.includes("	")) errors.push(`line ${i + 1}: tabs are not allowed for indentation, use two spaces`);
+    const withoutComment = stripTrailingComment(r);
+    if (withoutComment.trim() === "") continue;
+    const indent = withoutComment.length - withoutComment.trimStart().length;
+    if (indent % 2 !== 0) errors.push(`line ${i + 1}: indentation must be a multiple of two spaces`);
+    lines.push({ n: i + 1, indent, text: withoutComment.trim() });
+  }
+  if (errors.length > 0) return { value: void 0, errors };
+  if (lines.length === 0) return { value: void 0, errors: ["the file is empty"] };
+  let cursor = 0;
+  function parseBlock(minIndent) {
+    const first = lines[cursor];
+    const isList = first.text.startsWith("- ") || first.text === "-";
+    return isList ? parseList(first.indent) : parseMap(first.indent);
+    function parseList(indent) {
+      const out = [];
+      while (cursor < lines.length) {
+        const line = lines[cursor];
+        if (line.indent < indent || !line.text.startsWith("- ") && line.text !== "-") break;
+        if (line.indent > indent) {
+          errors.push(`line ${line.n}: unexpected indentation in a list`);
+          cursor++;
+          continue;
+        }
+        const rest = line.text === "-" ? "" : line.text.slice(2).trim();
+        if (rest === "") {
+          cursor++;
+          if (cursor < lines.length && lines[cursor].indent > indent) out.push(parseBlock(indent + 2));
+          else out.push(null);
+        } else if (/^[^:\s][^:]*:(\s|$)/.test(rest)) {
+          const synthIndent = line.indent + 2;
+          lines[cursor] = { n: line.n, indent: synthIndent, text: rest };
+          out.push(parseMap(synthIndent));
+        } else {
+          out.push(scalar(rest));
+          cursor++;
+        }
+      }
+      return out;
+    }
+    function parseMap(indent) {
+      const out = {};
+      while (cursor < lines.length) {
+        const line = lines[cursor];
+        if (line.indent < indent) break;
+        if (line.indent > indent) {
+          errors.push(`line ${line.n}: unexpected indentation`);
+          cursor++;
+          continue;
+        }
+        const m = line.text.match(/^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^:]+?)\s*:\s*(.*)$/);
+        if (!m) {
+          errors.push(`line ${line.n}: expected "key: value"`);
+          cursor++;
+          continue;
+        }
+        const key = String(scalar(m[1]));
+        const inline = m[2].trim();
+        cursor++;
+        if (inline === "|" || inline === ">" || inline === "|-" || inline === ">-") {
+          out[key] = readBlockScalar(indent, inline.startsWith(">"));
+        } else if (inline === "") {
+          if (cursor < lines.length && lines[cursor].indent > indent) out[key] = parseBlock(indent + 2);
+          else out[key] = null;
+        } else {
+          out[key] = scalar(inline);
+        }
+      }
+      return out;
+    }
+    function readBlockScalar(parentIndent, folded) {
+      const collected = [];
+      let blockIndent = -1;
+      while (cursor < lines.length) {
+        const line = lines[cursor];
+        if (line.indent <= parentIndent) break;
+        if (blockIndent === -1) blockIndent = line.indent;
+        collected.push(" ".repeat(Math.max(0, line.indent - blockIndent)) + line.text);
+        cursor++;
+      }
+      return folded ? collected.join(" ") : collected.join("\n");
+    }
+  }
+  const value = parseBlock(0);
+  if (cursor < lines.length) errors.push(`line ${lines[cursor].n}: could not be read as part of the document`);
+  return { value, errors };
+}
+function stripTrailingComment(line) {
+  let inS = false;
+  let inD = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "'" && !inD) inS = !inS;
+    else if (ch === '"' && !inS) inD = !inD;
+    else if (ch === "#" && !inS && !inD && (i === 0 || line[i - 1] === " " || line[i - 1] === "	")) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+// src/aiwork/contract.ts
+var ATOM_KINDS = /* @__PURE__ */ new Set(["number", "money", "date", "email", "url", "identifier", "quote", "name"]);
+function parseContract(text, filename = "contract") {
+  const isJson = filename.endsWith(".json") || text.trimStart().startsWith("{");
+  let root;
+  const errors = [];
+  if (isJson) {
+    try {
+      root = JSON.parse(text);
+    } catch (err) {
+      return { errors: [`${filename}: not valid JSON: ${String(err)}`] };
+    }
+  } else {
+    const y = parseYaml(text);
+    if (y.errors.length > 0) return { errors: y.errors.map((e) => `${filename}: ${e}`) };
+    root = y.value;
+  }
+  if (!root || typeof root !== "object" || Array.isArray(root)) {
+    return { errors: [`${filename}: the top level must be a mapping with at least "pipeline", "basis" and "attests"`] };
+  }
+  const obj = root;
+  const pipeline = typeof obj.pipeline === "string" ? obj.pipeline.trim() : "";
+  if (!pipeline) errors.push(`${filename}: "pipeline" is required and must name the pipeline this contract governs`);
+  const basis = obj.basis;
+  if (basis !== "intent" && basis !== "structure" && basis !== "observation") {
+    errors.push(`${filename}: "basis" is required and must be one of intent, structure, observation`);
+  }
+  const attests = typeof obj.attests === "string" ? obj.attests.trim() : "";
+  if (attests.length < 12 || attests.split(/\s+/).length < 3) {
+    errors.push(
+      `${filename}: "attests" is required and must be a real sentence saying who is standing behind these rules and on what date. It is printed next to every result.`
+    );
+  } else if (/^todo\b/i.test(attests) || /your name, the date/i.test(attests)) {
+    errors.push(`${filename}: "attests" is still the placeholder from the draft. Replace it with who is standing behind these rules and how they know.`);
+  }
+  const out = obj.output;
+  const output = {};
+  if (out && typeof out === "object" && !Array.isArray(out)) {
+    const o = out;
+    if (Array.isArray(o.must_contain)) output.must_contain = o.must_contain.map((m) => readMustContain(m, filename, errors));
+    if (Array.isArray(o.must_not_contain))
+      output.must_not_contain = o.must_not_contain.map((m) => readMustContain(m, filename, errors));
+    if (o.grounded && typeof o.grounded === "object" && !Array.isArray(o.grounded)) {
+      const g = o.grounded;
+      const kinds = Array.isArray(g.kinds) ? g.kinds.filter((k) => typeof k === "string" && ATOM_KINDS.has(k)) : void 0;
+      output.grounded = kinds ? { kinds } : {};
+    }
+    if (Array.isArray(o.predicates))
+      output.predicates = o.predicates.filter((p) => typeof p === "string");
+  }
+  const actions = [];
+  if (Array.isArray(obj.actions)) {
+    for (const a of obj.actions) {
+      if (!a || typeof a !== "object" || Array.isArray(a)) continue;
+      const ar = a;
+      const when = typeof ar.when === "string" ? ar.when : "";
+      const req = ar.require;
+      if (!when || !req || typeof req !== "object" || Array.isArray(req)) {
+        errors.push(`${filename}: each entry under "actions" needs a "when" regex and a "require" with a "kind"`);
+        continue;
+      }
+      const rr = req;
+      if (typeof rr.kind !== "string") {
+        errors.push(`${filename}: an action rule "require" needs a "kind" such as email.sent`);
+        continue;
+      }
+      actions.push({
+        when,
+        require: {
+          kind: rr.kind,
+          ...typeof rr.target_matches === "string" ? { target_matches: rr.target_matches } : {}
+        }
+      });
+    }
+  }
+  if (errors.length > 0) return { errors };
+  const contract = {
+    pipeline,
+    basis,
+    attests,
+    ...Object.keys(output).length > 0 ? { output } : {},
+    ...actions.length > 0 ? { actions } : {},
+    ...obj.consistency === true ? { consistency: true } : {}
+  };
+  return { contract, errors: [] };
+}
+function readMustContain(m, filename, errors) {
+  if (!m || typeof m !== "object" || Array.isArray(m)) {
+    errors.push(`${filename}: each must_contain / must_not_contain entry is "kind: <atom kind>" or "pattern: <regex>"`);
+    return {};
+  }
+  const mm = m;
+  if (typeof mm.kind === "string") {
+    if (!ATOM_KINDS.has(mm.kind)) errors.push(`${filename}: "${mm.kind}" is not a known atom kind`);
+    return { kind: mm.kind };
+  }
+  if (typeof mm.pattern === "string") return { pattern: mm.pattern };
+  errors.push(`${filename}: a must_contain entry needs "kind" or "pattern"`);
+  return {};
+}
+var CURRENCY = /\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\b|[$£€¥₹]/g;
+function moneyValues(text) {
+  return extractAtoms(text).filter((a) => a.kind === "money" || a.kind === "number").map((a) => Number(a.key)).filter((n) => Number.isFinite(n));
+}
+function dateValues(text) {
+  return extractAtoms(text).filter((a) => a.kind === "date").map((a) => a.key).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+}
+function currencyTokens(text) {
+  const map = { $: "USD", "\xA3": "GBP", "\u20AC": "EUR", "\xA5": "JPY", "\u20B9": "INR" };
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(CURRENCY)) out.add(map[m[0]] ?? m[0].toUpperCase());
+  return out;
+}
+function evalPredicate(pred, output, source, at) {
+  const clause = `predicate: ${pred}`;
+  const p = pred.trim();
+  let m = p.match(/^date\s+within\s+(\d+)\s*days?$/i);
+  if (m) {
+    const days = Number(m[1]);
+    const dates = dateValues(output);
+    if (dates.length === 0) return { clause, verdict: "unproven", detail: "the answer states no date, so this cannot be checked" };
+    const base = at && !Number.isNaN(Date.parse(at)) ? new Date(at) : /* @__PURE__ */ new Date();
+    for (const d of dates) {
+      const diff = (Date.parse(d) - base.getTime()) / 864e5;
+      if (diff < -1 || diff > days) {
+        return { clause, verdict: "violated", detail: `${d} is ${Math.round(diff)} days from the task date, outside the ${days}-day window`, evidence: d };
+      }
+    }
+    return { clause, verdict: "proven", detail: `every date in the answer is within ${days} days`, evidence: dates.join(", ") };
+  }
+  if (/^currency\s*==\s*source\.currency$/i.test(p)) {
+    const outC = currencyTokens(output);
+    const srcC = currencyTokens(source);
+    if (outC.size === 0 || srcC.size === 0) return { clause, verdict: "unproven", detail: "a currency could not be read on one side" };
+    const mismatch = [...outC].filter((c) => !srcC.has(c));
+    return mismatch.length > 0 ? { clause, verdict: "violated", detail: `the answer uses ${mismatch.join(", ")}, which the source does not`, evidence: [...outC].join(", ") } : { clause, verdict: "proven", detail: `currency matches the source (${[...outC].join(", ")})` };
+  }
+  m = p.match(/^(money|total|subtotal|tax)\s*(<=|>=|<|>|==|!=)\s*(source\.money\.(?:max|min)|-?\d[\d,]*(?:\.\d+)?)$/i);
+  if (m) {
+    const [, , op, rhsRaw] = m;
+    const outVals = moneyValues(output);
+    if (outVals.length === 0) return { clause, verdict: "unproven", detail: "the answer states no amount, so this cannot be checked" };
+    let rhs;
+    if (/^source\.money\.max$/i.test(rhsRaw)) {
+      const s = moneyValues(source);
+      if (s.length === 0) return { clause, verdict: "unproven", detail: "the source states no amount to compare against" };
+      rhs = Math.max(...s);
+    } else if (/^source\.money\.min$/i.test(rhsRaw)) {
+      const s = moneyValues(source);
+      if (s.length === 0) return { clause, verdict: "unproven", detail: "the source states no amount to compare against" };
+      rhs = Math.min(...s);
+    } else {
+      rhs = Number(rhsRaw.replace(/,/g, ""));
+    }
+    const bad = outVals.filter((v) => !compare(v, op, rhs));
+    return bad.length > 0 ? { clause, verdict: "violated", detail: `${bad.join(", ")} fail ${op} ${rhs}`, evidence: bad.join(", ") } : { clause, verdict: "proven", detail: `every amount satisfies ${op} ${rhs}` };
+  }
+  return { clause, verdict: "unproven", detail: "this predicate form is not recognised, so it was not evaluated" };
+}
+function compare(a, op, b) {
+  switch (op) {
+    case "<":
+      return a < b;
+    case "<=":
+      return a <= b + 1e-9;
+    case ">":
+      return a > b;
+    case ">=":
+      return a >= b - 1e-9;
+    case "==":
+      return Math.abs(a - b) < 1e-9;
+    case "!=":
+      return Math.abs(a - b) >= 1e-9;
+    default:
+      return false;
+  }
+}
+function worst(verdicts) {
+  if (verdicts.includes("violated")) return "violated";
+  if (verdicts.includes("unproven")) return "unproven";
+  return "proven";
+}
+function evaluateContract(contract, records) {
+  const tasks = [];
+  const byClause = {};
+  const tally = (c, v) => {
+    (byClause[c] ??= { proven: 0, violated: 0, unproven: 0 })[v] += 1;
+  };
+  for (const record of records) {
+    const clauses = [];
+    const { sources, basis: srcBasis } = groundingSourcesFor(record);
+    const source = sources.join("\n");
+    for (const mc of contract.output?.must_contain ?? []) {
+      const clause = mc.kind ? `must contain a ${mc.kind}` : `must contain /${mc.pattern}/`;
+      if (mc.kind) {
+        const has = extractAtoms(record.output).some((a) => a.kind === mc.kind);
+        clauses.push(
+          has ? { clause, verdict: "proven", detail: `an atom of kind ${mc.kind} is present` } : { clause, verdict: "violated", detail: `the contract requires a ${mc.kind} in every answer and this one has none` }
+        );
+      } else if (mc.pattern) {
+        const ok = safeRe(mc.pattern).test(record.output);
+        clauses.push(
+          ok ? { clause, verdict: "proven", detail: "the required pattern is present" } : { clause, verdict: "violated", detail: "the required pattern is absent" }
+        );
+      }
+    }
+    for (const mc of contract.output?.must_not_contain ?? []) {
+      const clause = mc.kind ? `must not contain a ${mc.kind}` : `must not contain /${mc.pattern}/`;
+      if (mc.pattern) {
+        const hit = safeRe(mc.pattern).exec(record.output);
+        clauses.push(
+          hit ? { clause, verdict: "violated", detail: "a forbidden pattern appears in the answer", evidence: hit[0] } : { clause, verdict: "proven", detail: "the forbidden pattern is absent" }
+        );
+      } else if (mc.kind) {
+        const hit = extractAtoms(record.output).find((a) => a.kind === mc.kind);
+        clauses.push(
+          hit ? { clause, verdict: "violated", detail: `a ${mc.kind} appears in the answer and the contract forbids it`, evidence: hit.text } : { clause, verdict: "proven", detail: `no ${mc.kind} appears` }
+        );
+      }
+    }
+    if (contract.output?.grounded) {
+      const clause = "grounded in the source";
+      const kinds = contract.output.grounded.kinds;
+      if (srcBasis !== "sources") {
+        clauses.push({ clause, verdict: "unproven", detail: "no retrieved source material was captured for this task" });
+      } else {
+        const g = checkGrounding(record.output, sources, kinds ? { kinds } : {});
+        if (g.inconclusive) clauses.push({ clause, verdict: "unproven", detail: g.reason ?? "too little to check" });
+        else if (g.ungrounded.length > 0)
+          clauses.push({
+            clause,
+            verdict: "violated",
+            detail: `${g.ungrounded.length} fact(s) in the answer are not in the source`,
+            evidence: g.ungrounded.map((u) => u.text).join(", ")
+          });
+        else clauses.push({ clause, verdict: "proven", detail: `${g.checked} fact(s) all trace to the source` });
+      }
+    }
+    for (const pred of contract.output?.predicates ?? []) {
+      clauses.push(evalPredicate(pred, record.output, source, record.at));
+    }
+    for (const rule of contract.actions ?? []) {
+      const clause = `when /${rule.when}/: ${rule.require.kind}`;
+      if (!safeRe(rule.when).test(record.output)) continue;
+      const actions = record.actions ?? [];
+      if (record.actions === void 0) {
+        clauses.push({
+          clause,
+          verdict: "unproven",
+          detail: "the answer says this action was taken, but no actions were recorded for the task, so it cannot be confirmed either way"
+        });
+        continue;
+      }
+      const targetRe = resolveTargetMatcher(rule.require.target_matches, source);
+      const match = actions.find(
+        (a) => a.kind === rule.require.kind && (!targetRe || a.target !== void 0 && targetRe.test(a.target))
+      );
+      clauses.push(
+        match ? { clause, verdict: "proven", detail: `a matching ${rule.require.kind} action is recorded`, evidence: match.target } : {
+          clause,
+          verdict: "violated",
+          detail: `the answer describes ${rule.require.kind} but no matching action was recorded`,
+          evidence: actions.map((a) => a.kind).join(", ") || "no actions"
+        }
+      );
+    }
+    if (contract.consistency) {
+      for (const bad of checkConsistency(record.output)) {
+        clauses.push({ clause: `internal consistency: ${bad.kind}`, verdict: "violated", detail: bad.summary, evidence: bad.evidence });
+      }
+    }
+    for (const co of clauses) tally(co.clause, co.verdict);
+    tasks.push({ id: record.id, verdict: worst(clauses.map((c) => c.verdict)), clauses });
+  }
+  const summary = {
+    proven: tasks.filter((t) => t.verdict === "proven").length,
+    violated: tasks.filter((t) => t.verdict === "violated").length,
+    unproven: tasks.filter((t) => t.verdict === "unproven").length,
+    byClause
+  };
+  const honesty = `These verdicts are measured against a contract on a ${contract.basis} basis. ` + (contract.basis === "intent" ? "A proven result means the work matches what a person wrote down that it is for. " : contract.basis === "structure" ? "A proven result means the work is consistent with how the system is built, not that the design is what the business needed. " : "A proven result means the work is consistent with what the system used to do, which is not evidence it was ever correct. ") + `Attestation: ${contract.attests}`;
+  return { contract, tasks, summary, honesty };
+}
+function safeRe(pattern) {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return /$a/;
+  }
+}
+function resolveTargetMatcher(spec, source) {
+  if (!spec) return void 0;
+  if (/^source\.email$/i.test(spec)) {
+    const e = source.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
+    return e ? new RegExp(escapeRe(e[0]), "i") : /$a/;
+  }
+  if (/^source\.url$/i.test(spec)) {
+    const u = source.match(/\bhttps?:\/\/[^\s"'<>)\]]+/);
+    return u ? new RegExp(escapeRe(u[0]), "i") : /$a/;
+  }
+  return safeRe(spec);
+}
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// src/aiwork/contract-draft.ts
+var KINDS_OF_INTEREST = ["money", "date", "identifier", "email", "url"];
+function draftContract(records, pipeline = "pipeline") {
+  const n = records.length;
+  const withOutput = records.filter((r) => r.output.trim().length > 0);
+  const anySources = records.some((r) => r.sources.length > 0);
+  const present = {};
+  for (const r of withOutput) {
+    const kinds = new Set(extractAtoms(r.output).map((a) => a.kind));
+    for (const k of KINDS_OF_INTEREST) if (kinds.has(k)) present[k] = (present[k] ?? 0) + 1;
+  }
+  const always = KINDS_OF_INTEREST.filter((k) => withOutput.length >= 3 && (present[k] ?? 0) >= withOutput.length * 0.9);
+  const groundKinds = KINDS_OF_INTEREST.filter((k) => (present[k] ?? 0) >= Math.max(2, withOutput.length * 0.5));
+  const lines = [];
+  lines.push(`pipeline: ${pipeline}`);
+  lines.push("basis: intent");
+  lines.push('attests: "TODO: your name, the date, and how you know these rules are what this pipeline is contracted to do"');
+  lines.push("");
+  if (always.length > 0 || groundKinds.length > 0 || anySources) {
+    lines.push("output:");
+    if (always.length > 0) {
+      lines.push("  must_contain:");
+      for (const k of always) lines.push(`    - kind: ${k}          # every answer in the sample had one`);
+    }
+    if (anySources && groundKinds.length > 0) {
+      lines.push("  grounded:");
+      lines.push(`    kinds: [${groundKinds.join(", ")}]`);
+    }
+    if ((present.money ?? 0) >= 2 && records.some((r) => r.sources.join(" ").match(/[£$€¥]\s?\d|\d\s?(?:USD|GBP|EUR)/))) {
+      lines.push("  predicates:");
+      lines.push('    - "money <= source.money.max"   # no answer quoted more than the largest figure in its source');
+    }
+    lines.push("");
+  }
+  lines.push("# consistency: true          # uncomment to fold the internal-consistency check into this contract");
+  lines.push("");
+  lines.push(`# Drafted from ${n} task(s). Nothing here is live until you edit it and fill in "attests".`);
+  return lines.join("\n") + "\n";
+}
+
 // src/aiwork/demo.ts
 var INVOICE = (n, total, vat, due) => `
 Invoice INV-2026-${String(400 + n).padStart(4, "0")} for Fernweh Supply Ltd
@@ -2165,6 +2640,8 @@ export {
   coverageHonesty,
   createRecorder,
   demoTasks,
+  draftContract,
+  evaluateContract,
   extractAtoms,
   extractTrace,
   gate,
@@ -2172,7 +2649,9 @@ export {
   hashEntry,
   isSubstantiveAttestation,
   looksDeferred,
+  parseContract,
   parseTaskRecords,
+  parseYaml,
   scoreBatch,
   verifyChain
 };
