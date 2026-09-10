@@ -73,12 +73,14 @@ const NOT_NAMES = new Set([
 const TRIVIAL_NUMBER_MAX = 10;
 
 function normaliseNumber(s: string): string {
-  // 1,234.50 and 1234.5 and 1234.50 are the same number.
+  // 1,234.50 and 1234.5 and 1234.50 and a figure with a non-breaking or thin
+  // space between digit groups are all the same number.
   const cleaned = s.replace(/[,\s]/g, '');
   const n = Number(cleaned.replace(/[^0-9.\-]/g, ''));
   if (!Number.isFinite(n)) return cleaned.toLowerCase();
   return String(n);
 }
+
 
 function normaliseText(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -89,7 +91,7 @@ const PATTERNS: ReadonlyArray<{ kind: AtomKind; re: RegExp }> = [
   { kind: 'url', re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
   {
     kind: 'money',
-    re: /(?:[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,]*(?:\.\d+)?)/g,
+    re: /(?:[$£€¥₹]\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)|(?:\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)/g,
   },
   { kind: 'date', re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
   // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
@@ -97,10 +99,10 @@ const PATTERNS: ReadonlyArray<{ kind: AtomKind; re: RegExp }> = [
   // stray number, which points a reviewer at "9999" instead of at the invented
   // invoice number it came from.
   { kind: 'identifier', re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
-  { kind: 'number', re: /\b\d[\d,]*(?:\.\d+)?\b/g },
+  { kind: 'number', re: /\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g },
 ];
 
-const QUOTE_RE = /["“”]([^"“”\n]{12,200})["“”]/g;
+const QUOTE_RE = /["“”„«»]([^"“”„«»\n]{12,200})["“”„«»]/g;
 
 /**
  * The forms a date could be written in, as ISO strings.
@@ -283,14 +285,24 @@ export function extractAtoms(text: string): readonly Atom[] {
     }
   }
 
+  // Languages that capitalise every noun (German, Luxembourgish) turn the
+  // single-word name heuristic into a machine for inventing entities. When the
+  // text looks non-English (guillemets or German quote marks, or a real
+  // density of Latin diacritics) and there is more than one mid-sentence
+  // capitalised word, only multi-word capitalised runs are trusted as names.
+  const midCaps = [...text.matchAll(/[a-zà-ÿ,]\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}/g)].length;
+  const diacritics = (text.match(/[À-ÿ]/g) ?? []).length;
+  const nounCapsLanguage = midCaps >= 2 && (/[„«»]/.test(text) || diacritics >= 3);
+
   // Capitalised runs, which is where invented people, companies and products live.
-  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  for (const m of text.matchAll(/\b([A-ZÀ-Þ][a-zà-ÿ]{2,}(?:\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? '';
     const start = (m.index ?? 0) + m[0].indexOf(raw);
     if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
 
     if (words.length === 1) {
+      if (nounCapsLanguage) continue;
       const w = words[0]!.toLowerCase();
       if (NOT_NAMES.has(w) || w.length < 4) continue;
       // A single capitalised word that opens a sentence is grammar, not a name.
@@ -464,7 +476,7 @@ export function checkGrounding(
 
   const sourceNormalised = normaliseText(sourceRaw);
   const sourceNumbers = new Set<string>();
-  for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  for (const m of sourceRaw.matchAll(/\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
   for (const { value } of spelledNumbers(sourceRaw)) sourceNumbers.add(String(value));
 
   const sourceDates = new Set<string>();

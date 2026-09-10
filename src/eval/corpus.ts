@@ -317,6 +317,47 @@ const structured: readonly Case[] = [
   },
 ];
 
+/* ------------------------------------------------------- unicode-and-i18n --- */
+
+const i18n: readonly Case[] = [
+  {
+    id: 'i18n-01-nbsp-in-number',
+    source: 'Total due £1 234.50 for the quarter.',
+    output: 'Your balance is £1,234.50.',
+    label: { id: 'i18n-01-nbsp-in-number', verdict: 'clean', note: 'a non-breaking space is a thousands separator, same figure' },
+  },
+  {
+    id: 'i18n-02-guillemets',
+    source: 'The policy states that refunds are issued within 14 days.',
+    output: 'They confirmed «refunds are issued within 14 days» in writing.',
+    label: { id: 'i18n-02-guillemets', verdict: 'clean', note: 'a real quotation in French quote marks' },
+  },
+  {
+    id: 'i18n-03-accented-name-faithful',
+    source: 'Account manager: Renée Fournier, reachable on the portal.',
+    output: 'Please contact Renée Fournier, your account manager.',
+    label: { id: 'i18n-03-accented-name-faithful', verdict: 'clean', note: 'an accented proper name that is in the source' },
+  },
+  {
+    id: 'i18n-04-non-english-answer-grounded',
+    source: 'Invoice INV-2026-0777. Total due EUR 480.00. Due 2026-10-01.',
+    output: 'Votre solde est de EUR 480.00, à régler avant le 2026-10-01. Facture INV-2026-0777.',
+    label: { id: 'i18n-04-non-english-answer-grounded', verdict: 'clean', note: 'a French answer whose figures, date and reference all trace to the source' },
+  },
+  {
+    id: 'i18n-05-german-quotes-altered',
+    source: 'Die Rückgabefrist beträgt 30 Tage ab Lieferung.',
+    output: 'Im Vertrag steht: „Die Rückgabefrist beträgt 60 Tage ab Lieferung."',
+    label: { id: 'i18n-05-german-quotes-altered', verdict: 'problem', kinds: ['ungrounded'], atoms: ['Die Rückgabefrist beträgt 60 Tage ab Lieferung', '60'], note: '30 became 60 inside German quotation marks' },
+  },
+  {
+    id: 'i18n-06-european-decimal',
+    source: 'Gesamtbetrag: 1.234,50 EUR.',
+    output: 'Your balance is 1.234,50 EUR.',
+    label: { id: 'i18n-06-european-decimal', verdict: 'clean', xfail: 'European decimal notation (comma decimal, dot thousands) is deliberately not normalised; here the answer copies the source string verbatim so it still matches', note: 'documents the known gap' },
+  },
+];
+
 /* ---------------------------------------------------------- cross-record --- */
 
 const TWO_INVOICES = `Invoice INV-2026-0501 for Fernweh Supply Ltd
@@ -378,6 +419,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
   const con = casesToRecords(contradiction);
   const str = casesToRecords(structured);
   const xr = casesToRecords(crossRecord);
+  const i18nb = casesToRecords(i18n);
 
   return [
     { name: 'billing-support', synthetic: true, records: demoTasks(), labels: billingLabels },
@@ -387,6 +429,7 @@ export function builtinBatches(): readonly LabelledBatch[] {
     { name: 'self-contradiction', synthetic: true, records: con.records, labels: con.labels },
     { name: 'structured-output', synthetic: true, records: str.records, labels: str.labels },
     { name: 'cross-record', synthetic: true, records: xr.records, labels: xr.labels },
+    { name: 'unicode-and-i18n', synthetic: true, records: i18nb.records, labels: i18nb.labels },
     { name: 'inconclusive', synthetic: true, records: inc.records, labels: inc.labels },
   ];
 }

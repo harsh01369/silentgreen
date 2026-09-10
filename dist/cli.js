@@ -3236,7 +3236,7 @@ var PATTERNS = [
   { kind: "url", re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
   {
     kind: "money",
-    re: /(?:[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,]*(?:\.\d+)?)/g
+    re: /(?:[$£€¥₹]\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)|(?:\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)/g
   },
   { kind: "date", re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
   // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
@@ -3244,9 +3244,9 @@ var PATTERNS = [
   // stray number, which points a reviewer at "9999" instead of at the invented
   // invoice number it came from.
   { kind: "identifier", re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
-  { kind: "number", re: /\b\d[\d,]*(?:\.\d+)?\b/g }
+  { kind: "number", re: /\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g }
 ];
-var QUOTE_RE = /["“”]([^"“”\n]{12,200})["“”]/g;
+var QUOTE_RE = /["“”„«»]([^"“”„«»\n]{12,200})["“”„«»]/g;
 function dateCandidates(raw) {
   const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return [`${iso[1]}-${iso[2]}-${iso[3]}`];
@@ -3391,12 +3391,16 @@ function extractAtoms(text) {
       claim(start, start + raw.length);
     }
   }
-  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  const midCaps = [...text.matchAll(/[a-zà-ÿ,]\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}/g)].length;
+  const diacritics = (text.match(/[À-ÿ]/g) ?? []).length;
+  const nounCapsLanguage = midCaps >= 2 && (/[„«»]/.test(text) || diacritics >= 3);
+  for (const m of text.matchAll(/\b([A-ZÀ-Þ][a-zà-ÿ]{2,}(?:\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? "";
     const start = (m.index ?? 0) + m[0].indexOf(raw);
     if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
     if (words.length === 1) {
+      if (nounCapsLanguage) continue;
       const w = words[0].toLowerCase();
       if (NOT_NAMES.has(w) || w.length < 4) continue;
       const before = text.slice(Math.max(0, start - 40), start);
@@ -3495,7 +3499,7 @@ function checkGrounding(output, sources, opts = {}) {
   }
   const sourceNormalised = normaliseText(sourceRaw);
   const sourceNumbers = /* @__PURE__ */ new Set();
-  for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  for (const m of sourceRaw.matchAll(/\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
   for (const { value } of spelledNumbers(sourceRaw)) sourceNumbers.add(String(value));
   const sourceDates = /* @__PURE__ */ new Set();
   for (const m of sourceRaw.matchAll(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g)) {
@@ -5038,6 +5042,44 @@ var structured = [
     label: { id: "so-05-clean-bare", verdict: "clean", note: "parses, and both values trace to the source" }
   }
 ];
+var i18n = [
+  {
+    id: "i18n-01-nbsp-in-number",
+    source: "Total due \xA31\xA0234.50 for the quarter.",
+    output: "Your balance is \xA31,234.50.",
+    label: { id: "i18n-01-nbsp-in-number", verdict: "clean", note: "a non-breaking space is a thousands separator, same figure" }
+  },
+  {
+    id: "i18n-02-guillemets",
+    source: "The policy states that refunds are issued within 14 days.",
+    output: "They confirmed \xABrefunds are issued within 14 days\xBB in writing.",
+    label: { id: "i18n-02-guillemets", verdict: "clean", note: "a real quotation in French quote marks" }
+  },
+  {
+    id: "i18n-03-accented-name-faithful",
+    source: "Account manager: Ren\xE9e Fournier, reachable on the portal.",
+    output: "Please contact Ren\xE9e Fournier, your account manager.",
+    label: { id: "i18n-03-accented-name-faithful", verdict: "clean", note: "an accented proper name that is in the source" }
+  },
+  {
+    id: "i18n-04-non-english-answer-grounded",
+    source: "Invoice INV-2026-0777. Total due EUR 480.00. Due 2026-10-01.",
+    output: "Votre solde est de EUR 480.00, \xE0 r\xE9gler avant le 2026-10-01. Facture INV-2026-0777.",
+    label: { id: "i18n-04-non-english-answer-grounded", verdict: "clean", note: "a French answer whose figures, date and reference all trace to the source" }
+  },
+  {
+    id: "i18n-05-german-quotes-altered",
+    source: "Die R\xFCckgabefrist betr\xE4gt 30 Tage ab Lieferung.",
+    output: 'Im Vertrag steht: \u201EDie R\xFCckgabefrist betr\xE4gt 60 Tage ab Lieferung."',
+    label: { id: "i18n-05-german-quotes-altered", verdict: "problem", kinds: ["ungrounded"], atoms: ["Die R\xFCckgabefrist betr\xE4gt 60 Tage ab Lieferung", "60"], note: "30 became 60 inside German quotation marks" }
+  },
+  {
+    id: "i18n-06-european-decimal",
+    source: "Gesamtbetrag: 1.234,50 EUR.",
+    output: "Your balance is 1.234,50 EUR.",
+    label: { id: "i18n-06-european-decimal", verdict: "clean", xfail: "European decimal notation (comma decimal, dot thousands) is deliberately not normalised; here the answer copies the source string verbatim so it still matches", note: "documents the known gap" }
+  }
+];
 var TWO_INVOICES = `Invoice INV-2026-0501 for Fernweh Supply Ltd
 Issued 2026-08-02, due 2026-09-02
 Subtotal \xA3300.00
@@ -5092,6 +5134,7 @@ function builtinBatches() {
   const con = casesToRecords(contradiction);
   const str3 = casesToRecords(structured);
   const xr = casesToRecords(crossRecord);
+  const i18nb = casesToRecords(i18n);
   return [
     { name: "billing-support", synthetic: true, records: demoTasks(), labels: billingLabels },
     { name: "faithful-adversarial", synthetic: true, records: faith.records, labels: faith.labels },
@@ -5100,6 +5143,7 @@ function builtinBatches() {
     { name: "self-contradiction", synthetic: true, records: con.records, labels: con.labels },
     { name: "structured-output", synthetic: true, records: str3.records, labels: str3.labels },
     { name: "cross-record", synthetic: true, records: xr.records, labels: xr.labels },
+    { name: "unicode-and-i18n", synthetic: true, records: i18nb.records, labels: i18nb.labels },
     { name: "inconclusive", synthetic: true, records: inc.records, labels: inc.labels }
   ];
 }

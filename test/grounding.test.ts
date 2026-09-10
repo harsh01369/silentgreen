@@ -241,3 +241,33 @@ describe('a near-miss figure is explained, not just flagged', () => {
     assert.match(hit!.why, /closest figure in the source is 539/);
   });
 });
+
+describe('unicode and other languages', () => {
+  test('a non-breaking space is a thousands separator, not the end of the figure', () => {
+    const r = checkGrounding('Your balance is £1,234.50.', ['Total due £1 234.50 for the quarter.']);
+    assert.deepEqual(r.ungrounded.filter((u) => u.kind === 'money' || u.kind === 'number').map((u) => u.text), []);
+  });
+
+  test('a real quotation in guillemets is matched', () => {
+    const src = 'The policy states that refunds are issued within 14 days.';
+    const r = checkGrounding('They confirmed «refunds are issued within 14 days» in writing.', [src]);
+    assert.deepEqual(r.ungrounded.filter((u) => u.kind === 'quote'), []);
+  });
+
+  test('an altered figure inside German quote marks is still caught', () => {
+    const src = 'Die Rückgabefrist beträgt 30 Tage ab Lieferung.';
+    const r = checkGrounding('Im Vertrag steht: „Die Rückgabefrist beträgt 60 Tage ab Lieferung."', [src]);
+    assert.ok(r.ungrounded.some((u) => u.kind === 'number' && u.text === '60'));
+  });
+
+  test('German common nouns are not reported as invented names', () => {
+    const src = 'Die Rückgabefrist beträgt 30 Tage ab Lieferung.';
+    const r = checkGrounding('Im Vertrag heißt es: „Die Rückgabefrist beträgt 30 Tage ab Lieferung."', [src]);
+    assert.deepEqual(r.ungrounded.filter((u) => u.kind === 'name'), []);
+  });
+
+  test('English proper names are still extracted', () => {
+    const r = checkGrounding('Your account manager is Priya Nair.', ['Account holder: Acme Ltd.']);
+    assert.ok(r.ungrounded.some((u) => u.kind === 'name' && /Priya Nair/.test(u.text)));
+  });
+});

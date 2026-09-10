@@ -205,13 +205,15 @@ fails.
 | self-contradiction | 7 | 1.00 | 1.00 | 0 |
 | structured-output | 5 | 1.00 | 1.00 | 0 |
 | cross-record | 4 | 1.00 | 1.00 | 0 |
+| unicode-and-i18n | 6 | 1.00 | 1.00 | 0 |
 | inconclusive | 3 | 1.00 | 1.00 | 0 |
-| **overall** | **65** | **1.000** | **1.000** | **0** |
+| **overall** | **71** | **1.000** | **1.000** | **0** |
 
 **This number is worth very little on its own, and the plan says so.** The corpus is
 entirely synthetic. It was written to pin down intended behaviour, including adversarial
 cases (a transposed figure, a date written day-first, a quotation repunctuated, a name that
-opens a sentence, a currency named as a code, an amount within a rounding of the real one),
+opens a sentence, a currency named as a code, an amount within a rounding of the real one, a
+figure spaced the European way, a quotation altered inside German quote marks),
 so 1.000 means the engine behaves the way its author meant and nothing stronger. It becomes
 evidence when real, third-party batches replace the fixtures. That swap is tracked as the
 first item in [SYSTEM-PLAN.md](SYSTEM-PLAN.md), and until it happens the honest reading of

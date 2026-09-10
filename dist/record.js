@@ -110,7 +110,7 @@ var PATTERNS = [
   { kind: "url", re: /\bhttps?:\/\/[^\s"'<>)\]]+/g },
   {
     kind: "money",
-    re: /(?:[$£€¥₹]\s?\d[\d,]*(?:\.\d+)?)|(?:\d[\d,]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,]*(?:\.\d+)?)/g
+    re: /(?:[$£€¥₹]\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)|(?:\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\s?(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF))\b|(?:\b(?:USD|GBP|EUR|INR|JPY|AUD|CAD|CHF)\s?\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?)/g
   },
   { kind: "date", re: /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g },
   // Identifiers: ORD-1042, INV-2026-0412, SKU12345. Every dashed segment has to
@@ -118,9 +118,9 @@ var PATTERNS = [
   // stray number, which points a reviewer at "9999" instead of at the invented
   // invoice number it came from.
   { kind: "identifier", re: /\b[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+\b|\b[A-Z]{2,}\d{3,}\b/g },
-  { kind: "number", re: /\b\d[\d,]*(?:\.\d+)?\b/g }
+  { kind: "number", re: /\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g }
 ];
-var QUOTE_RE = /["“”]([^"“”\n]{12,200})["“”]/g;
+var QUOTE_RE = /["“”„«»]([^"“”„«»\n]{12,200})["“”„«»]/g;
 function dateCandidates(raw) {
   const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return [`${iso[1]}-${iso[2]}-${iso[3]}`];
@@ -265,12 +265,16 @@ function extractAtoms(text) {
       claim(start, start + raw.length);
     }
   }
-  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  const midCaps = [...text.matchAll(/[a-zà-ÿ,]\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}/g)].length;
+  const diacritics = (text.match(/[À-ÿ]/g) ?? []).length;
+  const nounCapsLanguage = midCaps >= 2 && (/[„«»]/.test(text) || diacritics >= 3);
+  for (const m of text.matchAll(/\b([A-ZÀ-Þ][a-zà-ÿ]{2,}(?:\s+[A-ZÀ-Þ][a-zà-ÿ]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? "";
     const start = (m.index ?? 0) + m[0].indexOf(raw);
     if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
     if (words.length === 1) {
+      if (nounCapsLanguage) continue;
       const w = words[0].toLowerCase();
       if (NOT_NAMES.has(w) || w.length < 4) continue;
       const before = text.slice(Math.max(0, start - 40), start);
@@ -369,7 +373,7 @@ function checkGrounding(output, sources, opts = {}) {
   }
   const sourceNormalised = normaliseText(sourceRaw);
   const sourceNumbers = /* @__PURE__ */ new Set();
-  for (const m of sourceRaw.matchAll(/\b\d[\d,]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
+  for (const m of sourceRaw.matchAll(/\b\d[\d,\u00a0\u202f\u2009]*(?:\.\d+)?\b/g)) sourceNumbers.add(normaliseNumber(m[0]));
   for (const { value } of spelledNumbers(sourceRaw)) sourceNumbers.add(String(value));
   const sourceDates = /* @__PURE__ */ new Set();
   for (const m of sourceRaw.matchAll(/\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/g)) {
