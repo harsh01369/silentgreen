@@ -44,6 +44,8 @@ export const batch = pgTable('batch', {
   problematic: integer('problematic').notNull(),
   inconclusive: integer('inconclusive').notNull(),
   unreadableLines: integer('unreadable_lines').notNull().default(0),
+  /** Batch-shape signals from the engine: deferral rate, collapse, and so on. */
+  signals: jsonb('signals').notNull().default([]),
   uploadedBy: text('uploaded_by'),
   uploadedAt: timestamp('uploaded_at').notNull().defaultNow(),
 });

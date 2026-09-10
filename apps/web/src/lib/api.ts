@@ -21,6 +21,13 @@ export interface Project {
   slug: string;
 }
 
+export interface BatchSignal {
+  kind: string;
+  severity: 'concern' | 'notice';
+  summary: string;
+  sampleTaskIds: string[];
+}
+
 export interface BatchRow {
   id: string;
   source: string | null;
@@ -28,6 +35,7 @@ export interface BatchRow {
   cleanCount: number;
   problematic: number;
   inconclusive: number;
+  signals?: BatchSignal[];
   uploadedAt: string;
 }
 

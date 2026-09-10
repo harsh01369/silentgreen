@@ -57,6 +57,7 @@ export interface IngestResult {
     readonly headline: string;
     readonly caveat: string;
     readonly byKind: Readonly<Record<string, number>>;
+    readonly signals: readonly { kind: string; severity: string; summary: string; sampleTaskIds: readonly string[] }[];
   };
   readonly ledger: { readonly seq: number; readonly hash: string };
 }
@@ -76,6 +77,7 @@ export async function ingestBatch(input: IngestInput): Promise<IngestResult> {
       problematic: summary.problematic,
       inconclusive: summary.inconclusive,
       unreadableLines: input.unreadableLines ?? 0,
+      signals: summary.signals,
       uploadedBy: input.uploadedBy ?? null,
       uploadedAt: now,
     });
@@ -140,6 +142,7 @@ export async function ingestBatch(input: IngestInput): Promise<IngestResult> {
       headline: summary.headline,
       caveat: summary.caveat,
       byKind: summary.byKind,
+      signals: summary.signals,
     },
     ledger: await lastLedger(input.projectId),
   };

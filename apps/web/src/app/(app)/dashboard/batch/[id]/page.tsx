@@ -80,6 +80,23 @@ function BatchView({ data }: { data: BatchDetail }) {
         )}
       </div>
 
+      {batch.signals && batch.signals.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="font-display text-sm text-paper-dim">Across the batch</h2>
+          {batch.signals.map((s, i) => (
+            <div key={i} className="glass-quiet rounded-xl p-4 text-sm text-paper-dim">
+              <span className={s.severity === 'concern' ? 'text-amber' : 'text-slate-verdict'}>
+                {s.severity === 'concern' ? '! ' : '· '}
+              </span>
+              {s.summary}
+              {s.sampleTaskIds.length > 0 && (
+                <span className="ml-1 font-mono text-xs text-paper-faint">e.g. {s.sampleTaskIds.join(', ')}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       <p className="glass-quiet rounded-xl p-4 text-xs leading-relaxed text-paper-dim">
         This view shows the shape of each finding, not the value inside it. The personal data in an answer (an
         invented email, a snippet of output) is never stored on the free tier. To see the answer beside its

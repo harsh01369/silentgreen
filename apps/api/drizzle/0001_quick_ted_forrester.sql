@@ -1,0 +1,1 @@
+ALTER TABLE "batch" ADD COLUMN "signals" jsonb DEFAULT '[]'::jsonb NOT NULL;
