@@ -14,8 +14,7 @@
 
 import { Suspense, useMemo, useRef } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { EffectComposer, Bloom, Vignette, ChromaticAberration, SMAA } from '@react-three/postprocessing';
-import { BlendFunction } from 'postprocessing';
+import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
 import * as THREE from 'three';
 
 function mulberry32(seed: number) {
@@ -257,10 +256,11 @@ function Rig() {
   return null;
 }
 
-export function LedgerScene() {
+export function LedgerScene({ active = true }: { active?: boolean }) {
   return (
     <Canvas
-      dpr={[1, 1.75]}
+      frameloop={active ? 'always' : 'never'}
+      dpr={[1, 1.5]}
       gl={{ antialias: false, alpha: true, powerPreference: 'high-performance' }}
       camera={{ fov: 40, near: 0.1, far: 40 }}
       style={{ position: 'absolute', inset: 0 }}
@@ -274,16 +274,11 @@ export function LedgerScene() {
       <Suspense fallback={null}>
         <Field />
       </Suspense>
-      <EffectComposer multisampling={0}>
-        <SMAA />
-        <Bloom intensity={0.82} luminanceThreshold={0.3} luminanceSmoothing={0.55} mipmapBlur radius={0.62} />
-        <ChromaticAberration
-          blendFunction={BlendFunction.NORMAL}
-          offset={new THREE.Vector2(0.0003, 0.0004)}
-          radialModulation={false}
-          modulationOffset={0}
-        />
-        <Vignette eskil={false} offset={0.28} darkness={0.94} />
+      {/* MSAA on the composer instead of a separate SMAA pass; chromatic
+          aberration dropped. Two fewer full-screen passes per frame. */}
+      <EffectComposer multisampling={4}>
+        <Bloom intensity={0.8} luminanceThreshold={0.32} luminanceSmoothing={0.5} mipmapBlur radius={0.6} height={320} />
+        <Vignette eskil={false} offset={0.28} darkness={0.92} />
       </EffectComposer>
     </Canvas>
   );

@@ -127,10 +127,16 @@ export function HeroParallax({ children }: { children: ReactNode }) {
     const copy = el.querySelector<HTMLElement>('[data-hero-copy]');
     const ctx = gsap.context(() => {
       const tl = gsap.timeline({
-        scrollTrigger: { trigger: el, start: 'top top', end: 'bottom top', scrub: 0.6 },
+        scrollTrigger: { trigger: el, start: 'top top', end: 'bottom top', scrub: true },
       });
-      if (scene) tl.to(scene, { yPercent: 12, scale: 1.06, opacity: 0.3, ease: 'none' }, 0);
-      if (copy) tl.to(copy, { yPercent: -16, opacity: 0, ease: 'none' }, 0);
+      // Only translate + fade the canvas. Scaling a full-viewport WebGL layer
+      // forces the compositor to re-rasterise it on every scroll frame, which
+      // fought the scene's own render loop and dropped frames.
+      if (scene) {
+        gsap.set(scene, { willChange: 'transform, opacity' });
+        tl.to(scene, { yPercent: 10, opacity: 0.35, ease: 'none' }, 0);
+      }
+      if (copy) tl.to(copy, { yPercent: -14, opacity: 0, ease: 'none' }, 0);
     });
     return () => ctx.revert();
   }, []);

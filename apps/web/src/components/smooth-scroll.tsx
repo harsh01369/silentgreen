@@ -18,11 +18,13 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
 
     gsap.registerPlugin(ScrollTrigger);
 
+    // One layer of smoothing only. A frame-rate-independent lerp tracks the
+    // wheel closely; a long `duration` glide on top of ScrollTrigger's own
+    // scrub is what made the page feel heavy and mushy.
     const lenis = new Lenis({
-      duration: 1.05,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      wheelMultiplier: 0.9,
-      touchMultiplier: 1.4,
+      lerp: 0.11,
+      wheelMultiplier: 1,
+      touchMultiplier: 1.5,
     });
 
     lenis.on('scroll', ScrollTrigger.update);
@@ -32,6 +34,7 @@ export function SmoothScroll({ children }: { children: React.ReactNode }) {
     };
     gsap.ticker.add(raf);
     gsap.ticker.lagSmoothing(0);
+    ScrollTrigger.refresh();
 
     return () => {
       gsap.ticker.remove(raf);

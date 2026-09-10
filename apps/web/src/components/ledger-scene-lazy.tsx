@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 
 const LedgerScene = dynamic(() => import('./ledger-scene').then((m) => m.LedgerScene), {
@@ -15,6 +15,8 @@ const LedgerScene = dynamic(() => import('./ledger-scene').then((m) => m.LedgerS
  */
 export function LedgerSceneLazy() {
   const [show, setShow] = useState(false);
+  const [onScreen, setOnScreen] = useState(true);
+  const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -32,8 +34,22 @@ export function LedgerSceneLazy() {
     };
   }, []);
 
+  // Stop the render loop once the hero has scrolled away. Otherwise the scene
+  // keeps running four full-screen post passes behind the paper sections and
+  // makes the whole page feel heavy.
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => setOnScreen(entries[0]?.isIntersecting ?? true),
+      { threshold: 0.01 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   return (
-    <div className="absolute inset-0">
+    <div ref={hostRef} className="absolute inset-0">
       {/* the still fallback, always painted; the canvas fades in over it */}
       <div
         className="absolute inset-0"
@@ -46,7 +62,7 @@ export function LedgerSceneLazy() {
         className="absolute inset-0 transition-opacity duration-[1200ms]"
         style={{ opacity: show ? 1 : 0 }}
       >
-        {show && <LedgerScene />}
+        {show && <LedgerScene active={onScreen} />}
       </div>
     </div>
   );
