@@ -283,6 +283,66 @@ export function extractAtoms(text: string): readonly Atom[] {
 }
 
 /**
+ * Company-form suffixes that are interchangeable or droppable. "Fernweh Supply
+ * Ltd", "Fernweh Supply Limited" and "Fernweh Supply" are the same entity, and
+ * an answer that renders the suffix differently has not invented a company.
+ */
+const ORG_SUFFIX_SRC =
+  String.raw`\b(?:ltd|limited|inc|incorporated|llc|l\.l\.c|llp|plc|gmbh|ag|s\.a|sa|s\.r\.l|srl|b\.v|bv|pvt|private|pte|co|corp|corporation|company|holdings?|group|partners?)\b\.?`;
+
+function hasOrgSuffix(s: string): boolean {
+  return new RegExp(ORG_SUFFIX_SRC, 'i').test(s);
+}
+
+function stripOrgSuffix(s: string): string {
+  return s
+    .replace(new RegExp(ORG_SUFFIX_SRC, 'gi'), '')
+    .replace(/[.,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * A name counts as present if it appears verbatim, or if it appears once its
+ * interchangeable company suffix is set aside on both sides. The stripped form
+ * has to keep at least two words or six characters, so "Inc" alone can never
+ * match "increase".
+ */
+function nameIsPresent(atom: Atom, sourceRaw: string, sourceNormalised: string): boolean {
+  if (sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text)) return true;
+  if (!hasOrgSuffix(atom.text)) return false;
+  const stripped = stripOrgSuffix(atom.key);
+  if (stripped.length < 6 && stripped.split(' ').length < 2) return false;
+  return stripOrgSuffix(sourceNormalised).includes(stripped);
+}
+
+/**
+ * The nearest figure in the source to an amount that was not found, when there
+ * is one close enough to look like a slip rather than an invention: within two
+ * percent, or a single digit transposition. Used only to make the evidence more
+ * useful; it never changes the verdict.
+ */
+function nearestSourceNumber(value: number, sourceNumbers: ReadonlySet<string>): number | null {
+  let best: number | null = null;
+  let bestGap = Infinity;
+  const digits = String(Math.round(Math.abs(value)));
+  for (const key of sourceNumbers) {
+    const n = Number(key);
+    if (!Number.isFinite(n) || n === value) continue;
+    const gap = Math.abs(n - value);
+    const rel = gap / Math.max(Math.abs(value), 1);
+    const sameDigitsReordered =
+      String(Math.round(Math.abs(n))).length === digits.length &&
+      String(Math.round(Math.abs(n))).split('').sort().join('') === digits.split('').sort().join('');
+    if ((rel <= 0.02 || sameDigitsReordered) && gap < bestGap) {
+      best = n;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+/**
  * Is this atom present in the source?
  *
  * Comparison is deliberately forgiving: normalised case and whitespace,
@@ -310,6 +370,8 @@ function isPresent(
       const src = sourceNormalised.replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ');
       return src.includes(words);
     }
+    case 'name':
+      return nameIsPresent(atom, sourceRaw, sourceNormalised);
     default:
       return sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text);
   }
@@ -390,9 +452,15 @@ export function checkGrounding(
 
   const ungrounded: UngroundedAtom[] = [];
   for (const atom of atoms) {
-    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) {
-      ungrounded.push({ ...atom, why: describe(atom) });
+    if (isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) continue;
+    let why = describe(atom);
+    if (atom.kind === 'money' || atom.kind === 'number') {
+      const near = nearestSourceNumber(Number(atom.key), sourceNumbers);
+      if (near !== null) {
+        why += `. The closest figure in the source is ${near}, so this looks like a slip rather than an invention, but it is still not what the source says`;
+      }
     }
+    ungrounded.push({ ...atom, why });
   }
 
   return { checked: atoms.length, ungrounded, inconclusive: false };

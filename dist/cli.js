@@ -2817,7 +2817,100 @@ function pickSources(o) {
   }
   return [...new Set(found.filter((s) => s.trim().length > 0))];
 }
+function attrs(o) {
+  const a = o.attributes ?? o.attr ?? o.tags;
+  return isObj(a) ? { ...a, ...o } : o;
+}
+function parseMaybeJson(v) {
+  if (typeof v !== "string") return v;
+  const t = v.trim();
+  if (!(t.startsWith("{") || t.startsWith("["))) return v;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return v;
+  }
+}
+function genAiMessageText(v) {
+  const parsed = parseMaybeJson(v);
+  if (typeof parsed === "string") return parsed.trim() || void 0;
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i--) {
+      const t = genAiMessageText(parsed[i]);
+      if (t) return t;
+    }
+    return void 0;
+  }
+  if (isObj(parsed)) {
+    if (Array.isArray(parsed.parts)) {
+      const parts = parsed.parts.map((p) => isObj(p) ? str2(p.content) ?? str2(p.text) : str2(p)).filter(Boolean);
+      if (parts.length) return parts.join("\n");
+    }
+    if (Array.isArray(parsed.messages)) return genAiMessageText(parsed.messages);
+    const named = str2(parsed.content) ?? str2(parsed.text) ?? str2(parsed.answer) ?? str2(parsed.output) ?? str2(parsed.response) ?? str2(parsed.result) ?? str2(parsed.completion) ?? str2(parsed.question) ?? str2(parsed.query) ?? str2(parsed.input) ?? str2(parsed.prompt);
+    if (named) return named;
+    const strings = Object.values(parsed).filter((v2) => typeof v2 === "string" && v2.trim().length > 0);
+    if (strings.length === 1) return strings[0];
+    return void 0;
+  }
+  return void 0;
+}
+function flattenedRole(a, prefix) {
+  const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.(\\d+)\\.(?:message\\.)?(?:content|text)$`);
+  const rows = [];
+  for (const [k, v] of Object.entries(a)) {
+    const m = k.match(re);
+    if (m && typeof v === "string" && v.trim()) rows.push({ i: Number(m[1]), content: v });
+  }
+  if (rows.length === 0) return void 0;
+  rows.sort((x, y) => x.i - y.i);
+  return rows[rows.length - 1].content;
+}
+function hasGenAi(a) {
+  return Object.keys(a).some(
+    (k) => k.startsWith("gen_ai.") || k.startsWith("llm.") || k.startsWith("traceloop.") || k === "input.value" || k === "output.value"
+  );
+}
+function extractOtel(o) {
+  const a = attrs(o);
+  if (!hasGenAi(a)) return {};
+  const input = genAiMessageText(a["gen_ai.input.messages"]) ?? genAiMessageText(a["gen_ai.prompt"]) ?? genAiMessageText(a["llm.input_messages"]) ?? flattenedRole(a, "gen_ai.prompt") ?? flattenedRole(a, "llm.input_messages") ?? (str2(a["traceloop.entity.input"]) ? genAiMessageText(a["traceloop.entity.input"]) : void 0) ?? str2(a["gen_ai.request.instructions"]) ?? genAiMessageText(a["input.value"]);
+  const output = genAiMessageText(a["gen_ai.output.messages"]) ?? genAiMessageText(a["gen_ai.completion"]) ?? genAiMessageText(a["llm.output_messages"]) ?? flattenedRole(a, "gen_ai.completion") ?? flattenedRole(a, "llm.output_messages") ?? (str2(a["traceloop.entity.output"]) ? genAiMessageText(a["traceloop.entity.output"]) : void 0) ?? genAiMessageText(a["output.value"]);
+  const sources = [];
+  const docAttr = parseMaybeJson(a["retrieval.documents"] ?? a["gen_ai.retrieval.documents"]);
+  sources.push(...documentsFrom(docAttr));
+  for (const [k, v] of Object.entries(a)) {
+    if (/^(?:retrieval|gen_ai\.retrieval)\.documents?\.\d+\.(?:document\.)?content$/.test(k) && typeof v === "string" && v.trim()) {
+      sources.push(v);
+    }
+  }
+  for (const key of ["spans", "child_spans", "childSpans", "children"]) {
+    const kids = o[key];
+    if (!Array.isArray(kids)) continue;
+    for (const kid of kids) {
+      if (!isObj(kid)) continue;
+      if (!RETRIEVAL_NAME.test(str2(kid.name) ?? "")) continue;
+      const ka = attrs(kid);
+      const kd = parseMaybeJson(ka["retrieval.documents"]);
+      sources.push(...documentsFrom(kd));
+      for (const [k, v] of Object.entries(ka)) {
+        if (/documents?\.\d+\.(?:document\.)?content$/.test(k) && typeof v === "string" && v.trim()) sources.push(v);
+      }
+    }
+  }
+  const out = {
+    id: str2(o.trace_id) ?? str2(o.traceId) ?? str2(o.span_id) ?? str2(o.spanId) ?? str2(o.id),
+    at: str2(o.start_time) ?? str2(o.startTime) ?? str2(o.timestamp) ?? str2(a["gen_ai.request.time"])
+  };
+  if (input) out.input = input;
+  if (output) out.output = output;
+  const uniq = [...new Set(sources.filter((s) => s.trim().length > 0))];
+  if (uniq.length) out.sources = uniq;
+  return out;
+}
 function extractTrace(obj) {
+  const otel = extractOtel(obj);
+  if (otel.output || otel.input) return otel;
   const looksNested = isObj(obj.inputs) || isObj(obj.outputs) || isObj(obj.input) || isObj(obj.output) || Array.isArray(obj.observations) || Array.isArray(obj.child_runs) || Array.isArray(obj.childRuns);
   if (!looksNested) return {};
   const out = {
@@ -3300,6 +3393,37 @@ function extractAtoms(text) {
   }
   return atoms;
 }
+var ORG_SUFFIX_SRC = String.raw`\b(?:ltd|limited|inc|incorporated|llc|l\.l\.c|llp|plc|gmbh|ag|s\.a|sa|s\.r\.l|srl|b\.v|bv|pvt|private|pte|co|corp|corporation|company|holdings?|group|partners?)\b\.?`;
+function hasOrgSuffix(s) {
+  return new RegExp(ORG_SUFFIX_SRC, "i").test(s);
+}
+function stripOrgSuffix(s) {
+  return s.replace(new RegExp(ORG_SUFFIX_SRC, "gi"), "").replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+}
+function nameIsPresent(atom, sourceRaw, sourceNormalised) {
+  if (sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text)) return true;
+  if (!hasOrgSuffix(atom.text)) return false;
+  const stripped = stripOrgSuffix(atom.key);
+  if (stripped.length < 6 && stripped.split(" ").length < 2) return false;
+  return stripOrgSuffix(sourceNormalised).includes(stripped);
+}
+function nearestSourceNumber(value, sourceNumbers) {
+  let best = null;
+  let bestGap = Infinity;
+  const digits = String(Math.round(Math.abs(value)));
+  for (const key of sourceNumbers) {
+    const n = Number(key);
+    if (!Number.isFinite(n) || n === value) continue;
+    const gap = Math.abs(n - value);
+    const rel = gap / Math.max(Math.abs(value), 1);
+    const sameDigitsReordered = String(Math.round(Math.abs(n))).length === digits.length && String(Math.round(Math.abs(n))).split("").sort().join("") === digits.split("").sort().join("");
+    if ((rel <= 0.02 || sameDigitsReordered) && gap < bestGap) {
+      best = n;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
 function isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates) {
   switch (atom.kind) {
     case "number":
@@ -3314,6 +3438,8 @@ function isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates
       const src = sourceNormalised.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ");
       return src.includes(words);
     }
+    case "name":
+      return nameIsPresent(atom, sourceRaw, sourceNormalised);
     default:
       return sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text);
   }
@@ -3369,9 +3495,15 @@ function checkGrounding(output, sources, opts = {}) {
   }
   const ungrounded = [];
   for (const atom of atoms) {
-    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) {
-      ungrounded.push({ ...atom, why: describe2(atom) });
+    if (isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) continue;
+    let why = describe2(atom);
+    if (atom.kind === "money" || atom.kind === "number") {
+      const near2 = nearestSourceNumber(Number(atom.key), sourceNumbers);
+      if (near2 !== null) {
+        why += `. The closest figure in the source is ${near2}, so this looks like a slip rather than an invention, but it is still not what the source says`;
+      }
     }
+    ungrounded.push({ ...atom, why });
   }
   return { checked: atoms.length, ungrounded, inconclusive: false };
 }

@@ -211,3 +211,33 @@ describe('sentence punctuation is not part of the fact', () => {
     assert.ok(r.ungrounded.some((u) => u.kind === 'url' && u.text === 'https://pay.fernweh.example/now'));
   });
 });
+
+describe('company suffixes are interchangeable', () => {
+  test('"Limited" in the answer matches "Ltd" in the source', () => {
+    const src = 'Invoice for Fernweh Supply Ltd. Total due GBP 685.20.';
+    const r = checkGrounding('Your account with Fernweh Supply Limited has GBP 685.20 outstanding.', [src]);
+    assert.deepEqual(r.ungrounded.filter((u) => u.kind === 'name').map((u) => u.text), []);
+  });
+
+  test('the suffix dropped entirely still matches', () => {
+    const src = 'Account holder: Northwind Traders GmbH.';
+    const r = checkGrounding('This relates to Northwind Traders.', [src]);
+    assert.deepEqual(r.ungrounded.filter((u) => u.kind === 'name').map((u) => u.text), []);
+  });
+
+  test('a genuinely different company is still caught', () => {
+    const src = 'Invoice for Fernweh Supply Ltd.';
+    const r = checkGrounding('Your account with Contoso Logistics Limited is overdue.', [src]);
+    assert.ok(r.ungrounded.some((u) => u.kind === 'name' && /Contoso/.test(u.text)));
+  });
+});
+
+describe('a near-miss figure is explained, not just flagged', () => {
+  test('a transposed total points at the real one', () => {
+    const src = 'Subtotal £539.00. Total due £539.00.';
+    const r = checkGrounding('Your balance is £593.00.', [src]);
+    const hit = r.ungrounded.find((u) => u.kind === 'money' || u.kind === 'number');
+    assert.ok(hit);
+    assert.match(hit!.why, /closest figure in the source is 539/);
+  });
+});

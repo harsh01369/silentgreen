@@ -150,11 +150,168 @@ function pickSources(o: Obj): string[] {
   return [...new Set(found.filter((s) => s.trim().length > 0))];
 }
 
+/* ------------------------------------------------- OpenTelemetry GenAI --- */
+
+/**
+ * The OpenTelemetry GenAI semantic conventions, which is the shape OpenLLMetry
+ * (Traceloop), Arize, MLflow and a growing number of others emit. A span
+ * carries the prompt and completion as attributes, either structured or as a
+ * JSON string, under a handful of competing key styles as the convention has
+ * churned:
+ *
+ *   gen_ai.input.messages / gen_ai.output.messages   (current)
+ *   gen_ai.prompt / gen_ai.completion                (deprecated, still common)
+ *   gen_ai.prompt.0.content / gen_ai.completion.0.content   (OpenLLMetry flat)
+ *   traceloop.entity.input / traceloop.entity.output       (Traceloop workflows)
+ *
+ * Attributes may sit under `attributes` or be flattened onto the object.
+ */
+
+function attrs(o: Obj): Obj {
+  const a = o.attributes ?? o.attr ?? o.tags;
+  return isObj(a) ? { ...a, ...o } : o;
+}
+
+function parseMaybeJson(v: unknown): unknown {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  if (!(t.startsWith('{') || t.startsWith('['))) return v;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return v;
+  }
+}
+
+/** A GenAI message value: {role, content} or {role, parts:[{content|text}]}. */
+function genAiMessageText(v: unknown): string | undefined {
+  const parsed = parseMaybeJson(v);
+  if (typeof parsed === 'string') return parsed.trim() || undefined;
+  if (Array.isArray(parsed)) {
+    for (let i = parsed.length - 1; i >= 0; i--) {
+      const t = genAiMessageText(parsed[i]);
+      if (t) return t;
+    }
+    return undefined;
+  }
+  if (isObj(parsed)) {
+    if (Array.isArray(parsed.parts)) {
+      const parts = parsed.parts.map((p) => (isObj(p) ? str(p.content) ?? str(p.text) : str(p))).filter(Boolean);
+      if (parts.length) return parts.join('\n');
+    }
+    if (Array.isArray(parsed.messages)) return genAiMessageText(parsed.messages);
+    const named =
+      str(parsed.content) ??
+      str(parsed.text) ??
+      str(parsed.answer) ??
+      str(parsed.output) ??
+      str(parsed.response) ??
+      str(parsed.result) ??
+      str(parsed.completion) ??
+      str(parsed.question) ??
+      str(parsed.query) ??
+      str(parsed.input) ??
+      str(parsed.prompt);
+    if (named) return named;
+    // A wrapper object with exactly one string value: use it.
+    const strings = Object.values(parsed).filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    if (strings.length === 1) return strings[0];
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Collect flattened message attributes in index order and return the last one's
+ * text. Handles both `gen_ai.prompt.0.content` (OpenLLMetry) and
+ * `llm.input_messages.0.message.content` (OpenInference / Arize).
+ */
+function flattenedRole(a: Obj, prefix: string): string | undefined {
+  const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(\\d+)\\.(?:message\\.)?(?:content|text)$`);
+  const rows: { i: number; content: string }[] = [];
+  for (const [k, v] of Object.entries(a)) {
+    const m = k.match(re);
+    if (m && typeof v === 'string' && v.trim()) rows.push({ i: Number(m[1]), content: v });
+  }
+  if (rows.length === 0) return undefined;
+  rows.sort((x, y) => x.i - y.i);
+  return rows[rows.length - 1]!.content;
+}
+
+function hasGenAi(a: Obj): boolean {
+  return Object.keys(a).some(
+    (k) => k.startsWith('gen_ai.') || k.startsWith('llm.') || k.startsWith('traceloop.') || k === 'input.value' || k === 'output.value',
+  );
+}
+
+function extractOtel(o: Obj): TraceExtract {
+  const a = attrs(o);
+  if (!hasGenAi(a)) return {};
+
+  const input =
+    genAiMessageText(a['gen_ai.input.messages']) ??
+    genAiMessageText(a['gen_ai.prompt']) ??
+    genAiMessageText(a['llm.input_messages']) ??
+    flattenedRole(a, 'gen_ai.prompt') ??
+    flattenedRole(a, 'llm.input_messages') ??
+    (str(a['traceloop.entity.input']) ? genAiMessageText(a['traceloop.entity.input']) : undefined) ??
+    str(a['gen_ai.request.instructions']) ??
+    genAiMessageText(a['input.value']);
+
+  const output =
+    genAiMessageText(a['gen_ai.output.messages']) ??
+    genAiMessageText(a['gen_ai.completion']) ??
+    genAiMessageText(a['llm.output_messages']) ??
+    flattenedRole(a, 'gen_ai.completion') ??
+    flattenedRole(a, 'llm.output_messages') ??
+    (str(a['traceloop.entity.output']) ? genAiMessageText(a['traceloop.entity.output']) : undefined) ??
+    genAiMessageText(a['output.value']);
+
+  // Retrieved documents: OpenLLMetry retrieval spans flatten them, and some
+  // instrumentations put them on a `retrieval.documents` attribute.
+  const sources: string[] = [];
+  const docAttr = parseMaybeJson(a['retrieval.documents'] ?? a['gen_ai.retrieval.documents']);
+  sources.push(...documentsFrom(docAttr));
+  for (const [k, v] of Object.entries(a)) {
+    if (/^(?:retrieval|gen_ai\.retrieval)\.documents?\.\d+\.(?:document\.)?content$/.test(k) && typeof v === 'string' && v.trim()) {
+      sources.push(v);
+    }
+  }
+  // Child spans named like a retrieval step.
+  for (const key of ['spans', 'child_spans', 'childSpans', 'children']) {
+    const kids = o[key];
+    if (!Array.isArray(kids)) continue;
+    for (const kid of kids) {
+      if (!isObj(kid)) continue;
+      if (!RETRIEVAL_NAME.test(str(kid.name) ?? '')) continue;
+      const ka = attrs(kid);
+      const kd = parseMaybeJson(ka['retrieval.documents']);
+      sources.push(...documentsFrom(kd));
+      for (const [k, v] of Object.entries(ka)) {
+        if (/documents?\.\d+\.(?:document\.)?content$/.test(k) && typeof v === 'string' && v.trim()) sources.push(v);
+      }
+    }
+  }
+
+  const out: TraceExtract = {
+    id: str(o.trace_id) ?? str(o.traceId) ?? str(o.span_id) ?? str(o.spanId) ?? str(o.id),
+    at: str(o.start_time) ?? str(o.startTime) ?? str(o.timestamp) ?? str(a['gen_ai.request.time']),
+  };
+  if (input) (out as { input?: string }).input = input;
+  if (output) (out as { output?: string }).output = output;
+  const uniq = [...new Set(sources.filter((s) => s.trim().length > 0))];
+  if (uniq.length) (out as { sources?: readonly string[] }).sources = uniq;
+  return out;
+}
+
 /**
  * Given a raw exported object, return the flat fields we could recover from a
  * recognised trace shape. Empty object if nothing was recognised.
  */
 export function extractTrace(obj: Obj): TraceExtract {
+  const otel = extractOtel(obj);
+  if (otel.output || otel.input) return otel;
+
   // Only engage if this looks like a trace rather than an already-flat record.
   const looksNested =
     isObj(obj.inputs) ||

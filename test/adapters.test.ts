@@ -93,3 +93,89 @@ describe('the parser routes trace shapes through the adapter', () => {
     assert.equal(issues.length, 1);
   });
 });
+
+describe('OpenTelemetry GenAI span shapes', () => {
+  test('current convention: gen_ai.input.messages / gen_ai.output.messages as JSON strings', () => {
+    const span = {
+      trace_id: 'abc123',
+      start_time: '2026-09-05T09:00:00Z',
+      attributes: {
+        'gen_ai.system': 'openai',
+        'gen_ai.input.messages': JSON.stringify([{ role: 'user', parts: [{ type: 'text', content: 'What do I owe on INV-2026-0412?' }] }]),
+        'gen_ai.output.messages': JSON.stringify([{ role: 'assistant', parts: [{ type: 'text', content: 'The balance is GBP 685.20.' }] }]),
+      },
+    };
+    const t = extractTrace(span);
+    assert.equal(t.input, 'What do I owe on INV-2026-0412?');
+    assert.equal(t.output, 'The balance is GBP 685.20.');
+    assert.equal(t.id, 'abc123');
+  });
+
+  test('deprecated OpenLLMetry flat attributes: gen_ai.prompt.0.content / gen_ai.completion.0.content', () => {
+    const span = {
+      attributes: {
+        'gen_ai.prompt.0.role': 'system',
+        'gen_ai.prompt.0.content': 'You are a billing assistant.',
+        'gen_ai.prompt.1.role': 'user',
+        'gen_ai.prompt.1.content': 'When is INV-2026-0412 due?',
+        'gen_ai.completion.0.role': 'assistant',
+        'gen_ai.completion.0.content': 'It is due on 2026-09-13.',
+      },
+    };
+    const t = extractTrace(span);
+    assert.equal(t.input, 'When is INV-2026-0412 due?');
+    assert.equal(t.output, 'It is due on 2026-09-13.');
+  });
+
+  test('OpenInference / Arize: llm.output_messages flattened, plus retrieval documents', () => {
+    const span = {
+      name: 'agent-run',
+      attributes: {
+        'llm.input_messages.0.message.role': 'user',
+        'llm.input_messages.0.message.content': 'Summarise the invoice.',
+        'llm.output_messages.0.message.role': 'assistant',
+        'llm.output_messages.0.message.content': 'Total due GBP 685.20, due 2026-09-13.',
+      },
+      spans: [
+        {
+          name: 'retriever.get_relevant_documents',
+          attributes: {
+            'retrieval.documents.0.document.content': 'Invoice INV-2026-0412. Total due GBP 685.20. Due 2026-09-13.',
+          },
+        },
+      ],
+    };
+    const t = extractTrace(span);
+    assert.equal(t.output, 'Total due GBP 685.20, due 2026-09-13.');
+    assert.ok(t.sources && t.sources[0]!.includes('685.20'));
+  });
+
+  test('Traceloop workflow entity input/output', () => {
+    const span = {
+      attributes: {
+        'traceloop.entity.name': 'billing_workflow',
+        'traceloop.entity.input': JSON.stringify({ question: 'balance?' }),
+        'traceloop.entity.output': JSON.stringify({ answer: 'GBP 685.20' }),
+      },
+    };
+    const t = extractTrace(span);
+    assert.equal(t.output, 'GBP 685.20');
+  });
+
+  test('a plain flat record is not mistaken for an OTel span', () => {
+    const t = extractTrace({ input: 'q', output: 'a', sources: ['s'] });
+    assert.deepEqual(t, {});
+  });
+
+  test('parseTaskRecords reads a JSONL file of OTel spans', () => {
+    const line = JSON.stringify({
+      attributes: {
+        'gen_ai.prompt.0.content': 'What do I owe?',
+        'gen_ai.completion.0.content': 'You owe GBP 999.00.',
+      },
+    });
+    const { records } = parseTaskRecords(line);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]!.output, 'You owe GBP 999.00.');
+  });
+});

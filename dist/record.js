@@ -267,6 +267,37 @@ function extractAtoms(text) {
   }
   return atoms;
 }
+var ORG_SUFFIX_SRC = String.raw`\b(?:ltd|limited|inc|incorporated|llc|l\.l\.c|llp|plc|gmbh|ag|s\.a|sa|s\.r\.l|srl|b\.v|bv|pvt|private|pte|co|corp|corporation|company|holdings?|group|partners?)\b\.?`;
+function hasOrgSuffix(s) {
+  return new RegExp(ORG_SUFFIX_SRC, "i").test(s);
+}
+function stripOrgSuffix(s) {
+  return s.replace(new RegExp(ORG_SUFFIX_SRC, "gi"), "").replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+}
+function nameIsPresent(atom, sourceRaw, sourceNormalised) {
+  if (sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text)) return true;
+  if (!hasOrgSuffix(atom.text)) return false;
+  const stripped = stripOrgSuffix(atom.key);
+  if (stripped.length < 6 && stripped.split(" ").length < 2) return false;
+  return stripOrgSuffix(sourceNormalised).includes(stripped);
+}
+function nearestSourceNumber(value, sourceNumbers) {
+  let best = null;
+  let bestGap = Infinity;
+  const digits = String(Math.round(Math.abs(value)));
+  for (const key of sourceNumbers) {
+    const n = Number(key);
+    if (!Number.isFinite(n) || n === value) continue;
+    const gap = Math.abs(n - value);
+    const rel = gap / Math.max(Math.abs(value), 1);
+    const sameDigitsReordered = String(Math.round(Math.abs(n))).length === digits.length && String(Math.round(Math.abs(n))).split("").sort().join("") === digits.split("").sort().join("");
+    if ((rel <= 0.02 || sameDigitsReordered) && gap < bestGap) {
+      best = n;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
 function isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates) {
   switch (atom.kind) {
     case "number":
@@ -281,6 +312,8 @@ function isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates
       const src = sourceNormalised.replace(/[^\w\s]/g, " ").replace(/\s+/g, " ");
       return src.includes(words);
     }
+    case "name":
+      return nameIsPresent(atom, sourceRaw, sourceNormalised);
     default:
       return sourceNormalised.includes(atom.key) || sourceRaw.includes(atom.text);
   }
@@ -336,9 +369,15 @@ function checkGrounding(output, sources, opts = {}) {
   }
   const ungrounded = [];
   for (const atom of atoms) {
-    if (!isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) {
-      ungrounded.push({ ...atom, why: describe(atom) });
+    if (isPresent(atom, sourceRaw, sourceNormalised, sourceNumbers, sourceDates)) continue;
+    let why = describe(atom);
+    if (atom.kind === "money" || atom.kind === "number") {
+      const near2 = nearestSourceNumber(Number(atom.key), sourceNumbers);
+      if (near2 !== null) {
+        why += `. The closest figure in the source is ${near2}, so this looks like a slip rather than an invention, but it is still not what the source says`;
+      }
     }
+    ungrounded.push({ ...atom, why });
   }
   return { checked: atoms.length, ungrounded, inconclusive: false };
 }
