@@ -31,6 +31,9 @@ export interface Atom {
     readonly text: string;
     /** Normalised for comparison. Two atoms match when these are equal. */
     readonly key: string;
+    /** Character offset of `text` in the answer it was extracted from. */
+    readonly start: number;
+    readonly end: number;
 }
 export interface UngroundedAtom extends Atom {
     /** Written for somebody deciding whether this is a real fabrication. */
@@ -46,6 +49,7 @@ export interface GroundingResult {
 export declare function spelledNumbers(text: string): {
     raw: string;
     value: number;
+    start: number;
 }[];
 /**
  * Pull out the things in this text that are either true of the source or not.

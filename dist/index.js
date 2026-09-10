@@ -611,65 +611,78 @@ function spelledNumbers(text) {
   for (const m of text.matchAll(SPELLED_RE)) {
     const raw = m[0].trim();
     const value = spelledValue(raw);
-    if (value !== null && value > TRIVIAL_NUMBER_MAX) out.push({ raw, value });
+    if (value !== null && value > TRIVIAL_NUMBER_MAX) {
+      const lead = m[0].length - m[0].trimStart().length;
+      out.push({ raw, value, start: (m.index ?? 0) + lead });
+    }
   }
   return out;
 }
 function extractAtoms(text) {
   if (!text) return [];
-  let remaining = text;
   const atoms = [];
   const seen = /* @__PURE__ */ new Set();
+  const consumed = [];
+  const overlaps = (s, e) => consumed.some(([a, b]) => s < b && e > a);
+  const claim = (s, e) => consumed.push([s, e]);
   const trimTrailingPunctuation = (s) => s.replace(/[.,;:!?)\]}'"»]+$/, "");
-  const push = (kind, rawIn, keyIn) => {
+  const push = (kind, rawIn, keyIn, start) => {
     let raw = rawIn;
     let key = keyIn;
+    let end = start + raw.length;
     if (kind === "url" || kind === "email" || kind === "identifier") {
-      raw = trimTrailingPunctuation(raw);
+      const trimmed = trimTrailingPunctuation(raw);
+      end = start + trimmed.length;
+      raw = trimmed;
       key = trimTrailingPunctuation(key);
     }
     if (!raw) return;
     const id = `${kind}|${key}`;
     if (seen.has(id)) return;
     seen.add(id);
-    atoms.push({ kind, text: raw, key });
+    atoms.push({ kind, text: raw, key, start, end });
   };
   for (const m of text.matchAll(QUOTE_RE)) {
     const raw = m[1] ?? "";
-    if (raw) push("quote", raw, normaliseText(raw));
+    if (!raw) continue;
+    const inner = (m.index ?? 0) + m[0].indexOf(raw);
+    push("quote", raw, normaliseText(raw), inner);
   }
-  for (const { raw, value } of spelledNumbers(text)) {
-    push("number", raw, String(value));
-    remaining = remaining.split(raw).join(" ");
+  for (const { raw, value, start } of spelledNumbers(text)) {
+    if (overlaps(start, start + raw.length)) continue;
+    push("number", raw, String(value), start);
+    claim(start, start + raw.length);
   }
   for (const { kind, re } of PATTERNS) {
-    const found = [];
-    for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
+    for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
       const raw = m[0];
-      if (!raw) continue;
-      found.push(m[0]);
+      const start = m.index ?? 0;
+      if (!raw || overlaps(start, start + raw.length)) continue;
       if (kind === "number" || kind === "money") {
         const n = Number(normaliseNumber(raw));
         if (kind === "number" && Number.isFinite(n) && Math.abs(n) <= TRIVIAL_NUMBER_MAX && !raw.includes(".")) continue;
-        push(kind, raw, normaliseNumber(raw));
+        push(kind, raw, normaliseNumber(raw), start);
       } else {
-        push(kind, raw, normaliseText(raw));
+        push(kind, raw, normaliseText(raw), start);
       }
+      claim(start, start + raw.length);
     }
-    for (const f of found) remaining = remaining.split(f).join(" ");
   }
-  for (const m of remaining.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? "";
+    const start = (m.index ?? 0) + m[0].indexOf(raw);
+    if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
     if (words.length === 1) {
       const w = words[0].toLowerCase();
       if (NOT_NAMES.has(w) || w.length < 4) continue;
-      const before = remaining.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+      const before = text.slice(Math.max(0, start - 40), start);
       if (/(^|[.!?:;•\-])\s*$/.test(before) || /\n\s*$/.test(before)) continue;
     } else if (words.every((w) => NOT_NAMES.has(w.toLowerCase()))) {
       continue;
     }
-    push("name", raw, normaliseText(raw));
+    push("name", raw, normaliseText(raw), start);
+    claim(start, start + raw.length);
   }
   return atoms;
 }
@@ -1320,7 +1333,8 @@ function checkBatch(records, opts = {}) {
           problems.push({
             kind: "ungrounded",
             summary: `"${u.text}" is ${u.why}.`,
-            evidence: u.text
+            evidence: u.text,
+            span: { start: u.start, end: u.end, atomKind: u.kind }
           });
         }
       }
@@ -1469,6 +1483,64 @@ function createRecorder(options = {}) {
       return { summary: checkBatch(records, opts).summary, records };
     },
     flush
+  };
+}
+
+// src/verify/inspect.ts
+function isContainer(a, all) {
+  return all.some((b) => b !== a && b.start >= a.start && b.end <= a.end && b.end - b.start < a.end - a.start);
+}
+function firstIndexOf(haystack, needleRaw) {
+  const i = haystack.indexOf(needleRaw);
+  if (i !== -1) return i;
+  const j = haystack.toLowerCase().indexOf(needleRaw.toLowerCase());
+  return j;
+}
+function inspectTask(record) {
+  const { sources, basis, note } = groundingSourcesFor(record);
+  const source = sources.join("\n\n");
+  const answer = record.output;
+  const g = checkGrounding(answer, sources);
+  const ungroundedKeys = new Map(g.ungrounded.map((u) => [`${u.kind}|${u.key}`, u.why]));
+  const atoms = [...extractAtoms(answer)].sort((a, b) => a.start - b.start || b.end - a.end);
+  const inline = atoms.filter((a) => a.kind !== "quote" && !isContainer(a, atoms));
+  const segments = [];
+  let cursor = 0;
+  for (const a of inline) {
+    if (a.start < cursor) continue;
+    if (a.start > cursor) segments.push({ text: answer.slice(cursor, a.start), kind: "plain" });
+    const why = ungroundedKeys.get(`${a.kind}|${a.key}`);
+    segments.push(
+      why ? { text: answer.slice(a.start, a.end), kind: "ungrounded", atomKind: a.kind, why } : { text: answer.slice(a.start, a.end), kind: "grounded", atomKind: a.kind }
+    );
+    cursor = a.end;
+  }
+  if (cursor < answer.length) segments.push({ text: answer.slice(cursor), kind: "plain" });
+  const highlights = [];
+  if (source) {
+    for (const a of inline) {
+      if (ungroundedKeys.has(`${a.kind}|${a.key}`)) continue;
+      const at = firstIndexOf(source, a.text);
+      if (at !== -1 && !highlights.some((h) => at < h.end && at + a.text.length > h.start)) {
+        highlights.push({ start: at, end: at + a.text.length, atomKind: a.kind, text: source.slice(at, at + a.text.length) });
+      }
+    }
+    highlights.sort((x, y) => x.start - y.start);
+  }
+  const quotes = atoms.filter((a) => a.kind === "quote").map((a) => ({ text: a.text, grounded: !ungroundedKeys.has(`quote|${a.key}`) }));
+  const groundedCount = g.checked - g.ungrounded.length;
+  return {
+    id: record.id,
+    answer,
+    segments,
+    source,
+    sourceHighlights: highlights,
+    quotes,
+    counts: { grounded: groundedCount, ungrounded: g.ungrounded.length, checked: g.checked },
+    basis,
+    ...note ? { note } : {},
+    inconclusive: g.inconclusive,
+    ...g.reason ? { reason: g.reason } : {}
   };
 }
 
@@ -2747,6 +2819,7 @@ export {
   gate,
   groundingSourcesFor,
   hashEntry,
+  inspectTask,
   isSubstantiveAttestation,
   looksDeferred,
   parseContract,

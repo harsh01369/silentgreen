@@ -82,6 +82,8 @@ export async function ingestBatch(input: IngestInput): Promise<IngestResult> {
       uploadedAt: now,
     });
 
+    const charsById = new Map(input.records.map((rec) => [rec.id, rec.output.length]));
+
     for (const r of results) {
       const trId = randomUUID();
       await tx.insert(taskResult).values({
@@ -90,18 +92,22 @@ export async function ingestBatch(input: IngestInput): Promise<IngestResult> {
         taskId: r.id,
         verdict: r.problems.length > 0 ? 'problem' : r.inconclusive ? 'inconclusive' : 'clean',
         atomsChecked: r.atomsChecked,
+        answerChars: charsById.get(r.id) ?? 0,
         inconclusiveReason: r.inconclusiveReason ?? null,
         at: r.at ? new Date(r.at) : null,
       });
       if (r.problems.length > 0) {
         await tx.insert(problem).values(
-          r.problems.map((p: { kind: string; summary: string; evidence: string }) => ({
-            id: randomUUID(),
-            taskResultId: trId,
-            kind: p.kind,
-            summary: p.summary,
-            evidenceRedacted: redact(p.kind, p.evidence),
-          })),
+          r.problems.map(
+            (p: { kind: string; summary: string; evidence: string; span?: { start: number; end: number; atomKind: string } }) => ({
+              id: randomUUID(),
+              taskResultId: trId,
+              kind: p.kind,
+              summary: p.summary,
+              evidenceRedacted: redact(p.kind, p.evidence),
+              span: p.span ?? null,
+            }),
+          ),
         );
       }
     }

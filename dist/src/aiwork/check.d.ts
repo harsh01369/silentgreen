@@ -29,6 +29,16 @@ export interface TaskProblem {
     readonly summary: string;
     /** The literal text that decided it. Never paraphrased. */
     readonly evidence: string;
+    /**
+     * Where in the answer the finding sits, when it is a span (a fabricated
+     * atom). Character offsets, no value. A redacted surface can mark the
+     * position without ever holding the text.
+     */
+    readonly span?: {
+        readonly start: number;
+        readonly end: number;
+        readonly atomKind: string;
+    };
 }
 export interface TaskResult {
     readonly id: string;

@@ -3334,65 +3334,78 @@ function spelledNumbers(text) {
   for (const m of text.matchAll(SPELLED_RE)) {
     const raw = m[0].trim();
     const value = spelledValue(raw);
-    if (value !== null && value > TRIVIAL_NUMBER_MAX) out.push({ raw, value });
+    if (value !== null && value > TRIVIAL_NUMBER_MAX) {
+      const lead = m[0].length - m[0].trimStart().length;
+      out.push({ raw, value, start: (m.index ?? 0) + lead });
+    }
   }
   return out;
 }
 function extractAtoms(text) {
   if (!text) return [];
-  let remaining = text;
   const atoms = [];
   const seen = /* @__PURE__ */ new Set();
+  const consumed = [];
+  const overlaps = (s, e) => consumed.some(([a, b]) => s < b && e > a);
+  const claim = (s, e) => consumed.push([s, e]);
   const trimTrailingPunctuation = (s) => s.replace(/[.,;:!?)\]}'"»]+$/, "");
-  const push = (kind, rawIn, keyIn) => {
+  const push = (kind, rawIn, keyIn, start) => {
     let raw = rawIn;
     let key = keyIn;
+    let end = start + raw.length;
     if (kind === "url" || kind === "email" || kind === "identifier") {
-      raw = trimTrailingPunctuation(raw);
+      const trimmed = trimTrailingPunctuation(raw);
+      end = start + trimmed.length;
+      raw = trimmed;
       key = trimTrailingPunctuation(key);
     }
     if (!raw) return;
     const id = `${kind}|${key}`;
     if (seen.has(id)) return;
     seen.add(id);
-    atoms.push({ kind, text: raw, key });
+    atoms.push({ kind, text: raw, key, start, end });
   };
   for (const m of text.matchAll(QUOTE_RE)) {
     const raw = m[1] ?? "";
-    if (raw) push("quote", raw, normaliseText(raw));
+    if (!raw) continue;
+    const inner = (m.index ?? 0) + m[0].indexOf(raw);
+    push("quote", raw, normaliseText(raw), inner);
   }
-  for (const { raw, value } of spelledNumbers(text)) {
-    push("number", raw, String(value));
-    remaining = remaining.split(raw).join(" ");
+  for (const { raw, value, start } of spelledNumbers(text)) {
+    if (overlaps(start, start + raw.length)) continue;
+    push("number", raw, String(value), start);
+    claim(start, start + raw.length);
   }
   for (const { kind, re } of PATTERNS) {
-    const found = [];
-    for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
+    for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
       const raw = m[0];
-      if (!raw) continue;
-      found.push(m[0]);
+      const start = m.index ?? 0;
+      if (!raw || overlaps(start, start + raw.length)) continue;
       if (kind === "number" || kind === "money") {
         const n = Number(normaliseNumber(raw));
         if (kind === "number" && Number.isFinite(n) && Math.abs(n) <= TRIVIAL_NUMBER_MAX && !raw.includes(".")) continue;
-        push(kind, raw, normaliseNumber(raw));
+        push(kind, raw, normaliseNumber(raw), start);
       } else {
-        push(kind, raw, normaliseText(raw));
+        push(kind, raw, normaliseText(raw), start);
       }
+      claim(start, start + raw.length);
     }
-    for (const f of found) remaining = remaining.split(f).join(" ");
   }
-  for (const m of remaining.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? "";
+    const start = (m.index ?? 0) + m[0].indexOf(raw);
+    if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
     if (words.length === 1) {
       const w = words[0].toLowerCase();
       if (NOT_NAMES.has(w) || w.length < 4) continue;
-      const before = remaining.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+      const before = text.slice(Math.max(0, start - 40), start);
       if (/(^|[.!?:;•\-])\s*$/.test(before) || /\n\s*$/.test(before)) continue;
     } else if (words.every((w) => NOT_NAMES.has(w.toLowerCase()))) {
       continue;
     }
-    push("name", raw, normaliseText(raw));
+    push("name", raw, normaliseText(raw), start);
+    claim(start, start + raw.length);
   }
   return atoms;
 }
@@ -3979,7 +3992,8 @@ function checkBatch(records, opts = {}) {
           problems.push({
             kind: "ungrounded",
             summary: `"${u.text}" is ${u.why}.`,
-            evidence: u.text
+            evidence: u.text,
+            span: { start: u.start, end: u.end, atomKind: u.kind }
           });
         }
       }
@@ -4052,9 +4066,9 @@ function parseYaml(text) {
     if (r.includes("	")) errors.push(`line ${i + 1}: tabs are not allowed for indentation, use two spaces`);
     const withoutComment = stripTrailingComment(r);
     if (withoutComment.trim() === "") continue;
-    const indent = withoutComment.length - withoutComment.trimStart().length;
-    if (indent % 2 !== 0) errors.push(`line ${i + 1}: indentation must be a multiple of two spaces`);
-    lines.push({ n: i + 1, indent, text: withoutComment.trim() });
+    const indent2 = withoutComment.length - withoutComment.trimStart().length;
+    if (indent2 % 2 !== 0) errors.push(`line ${i + 1}: indentation must be a multiple of two spaces`);
+    lines.push({ n: i + 1, indent: indent2, text: withoutComment.trim() });
   }
   if (errors.length > 0) return { value: void 0, errors };
   if (lines.length === 0) return { value: void 0, errors: ["the file is empty"] };
@@ -4063,12 +4077,12 @@ function parseYaml(text) {
     const first = lines[cursor];
     const isList = first.text.startsWith("- ") || first.text === "-";
     return isList ? parseList(first.indent) : parseMap(first.indent);
-    function parseList(indent) {
+    function parseList(indent2) {
       const out = [];
       while (cursor < lines.length) {
         const line = lines[cursor];
-        if (line.indent < indent || !line.text.startsWith("- ") && line.text !== "-") break;
-        if (line.indent > indent) {
+        if (line.indent < indent2 || !line.text.startsWith("- ") && line.text !== "-") break;
+        if (line.indent > indent2) {
           errors.push(`line ${line.n}: unexpected indentation in a list`);
           cursor++;
           continue;
@@ -4076,7 +4090,7 @@ function parseYaml(text) {
         const rest = line.text === "-" ? "" : line.text.slice(2).trim();
         if (rest === "") {
           cursor++;
-          if (cursor < lines.length && lines[cursor].indent > indent) out.push(parseBlock(indent + 2));
+          if (cursor < lines.length && lines[cursor].indent > indent2) out.push(parseBlock(indent2 + 2));
           else out.push(null);
         } else if (/^[^:\s][^:]*:(\s|$)/.test(rest)) {
           const synthIndent = line.indent + 2;
@@ -4089,12 +4103,12 @@ function parseYaml(text) {
       }
       return out;
     }
-    function parseMap(indent) {
+    function parseMap(indent2) {
       const out = {};
       while (cursor < lines.length) {
         const line = lines[cursor];
-        if (line.indent < indent) break;
-        if (line.indent > indent) {
+        if (line.indent < indent2) break;
+        if (line.indent > indent2) {
           errors.push(`line ${line.n}: unexpected indentation`);
           cursor++;
           continue;
@@ -4109,9 +4123,9 @@ function parseYaml(text) {
         const inline = m[2].trim();
         cursor++;
         if (inline === "|" || inline === ">" || inline === "|-" || inline === ">-") {
-          out[key] = readBlockScalar(indent, inline.startsWith(">"));
+          out[key] = readBlockScalar(indent2, inline.startsWith(">"));
         } else if (inline === "") {
-          if (cursor < lines.length && lines[cursor].indent > indent) out[key] = parseBlock(indent + 2);
+          if (cursor < lines.length && lines[cursor].indent > indent2) out[key] = parseBlock(indent2 + 2);
           else out[key] = null;
         } else {
           out[key] = scalar(inline);
@@ -4494,6 +4508,64 @@ function draftContract(records, pipeline = "pipeline") {
   lines.push("");
   lines.push(`# Drafted from ${n} task(s). Nothing here is live until you edit it and fill in "attests".`);
   return lines.join("\n") + "\n";
+}
+
+// src/verify/inspect.ts
+function isContainer(a, all) {
+  return all.some((b) => b !== a && b.start >= a.start && b.end <= a.end && b.end - b.start < a.end - a.start);
+}
+function firstIndexOf(haystack, needleRaw) {
+  const i = haystack.indexOf(needleRaw);
+  if (i !== -1) return i;
+  const j = haystack.toLowerCase().indexOf(needleRaw.toLowerCase());
+  return j;
+}
+function inspectTask(record) {
+  const { sources, basis, note } = groundingSourcesFor(record);
+  const source = sources.join("\n\n");
+  const answer = record.output;
+  const g = checkGrounding(answer, sources);
+  const ungroundedKeys = new Map(g.ungrounded.map((u) => [`${u.kind}|${u.key}`, u.why]));
+  const atoms = [...extractAtoms(answer)].sort((a, b) => a.start - b.start || b.end - a.end);
+  const inline = atoms.filter((a) => a.kind !== "quote" && !isContainer(a, atoms));
+  const segments = [];
+  let cursor = 0;
+  for (const a of inline) {
+    if (a.start < cursor) continue;
+    if (a.start > cursor) segments.push({ text: answer.slice(cursor, a.start), kind: "plain" });
+    const why = ungroundedKeys.get(`${a.kind}|${a.key}`);
+    segments.push(
+      why ? { text: answer.slice(a.start, a.end), kind: "ungrounded", atomKind: a.kind, why } : { text: answer.slice(a.start, a.end), kind: "grounded", atomKind: a.kind }
+    );
+    cursor = a.end;
+  }
+  if (cursor < answer.length) segments.push({ text: answer.slice(cursor), kind: "plain" });
+  const highlights = [];
+  if (source) {
+    for (const a of inline) {
+      if (ungroundedKeys.has(`${a.kind}|${a.key}`)) continue;
+      const at = firstIndexOf(source, a.text);
+      if (at !== -1 && !highlights.some((h) => at < h.end && at + a.text.length > h.start)) {
+        highlights.push({ start: at, end: at + a.text.length, atomKind: a.kind, text: source.slice(at, at + a.text.length) });
+      }
+    }
+    highlights.sort((x, y) => x.start - y.start);
+  }
+  const quotes = atoms.filter((a) => a.kind === "quote").map((a) => ({ text: a.text, grounded: !ungroundedKeys.has(`quote|${a.key}`) }));
+  const groundedCount = g.checked - g.ungrounded.length;
+  return {
+    id: record.id,
+    answer,
+    segments,
+    source,
+    sourceHighlights: highlights,
+    quotes,
+    counts: { grounded: groundedCount, ungrounded: g.ungrounded.length, checked: g.checked },
+    basis,
+    ...note ? { note } : {},
+    inconclusive: g.inconclusive,
+    ...g.reason ? { reason: g.reason } : {}
+  };
 }
 
 // src/aiwork/demo.ts
@@ -5065,7 +5137,7 @@ function arg(rest, flag) {
   const i = rest.indexOf(flag);
   return i >= 0 ? rest[i + 1] : void 0;
 }
-var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port"]);
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port", "--task"]);
 function positional(rest) {
   const out = [];
   for (let i = 0; i < rest.length; i++) {
@@ -5415,6 +5487,67 @@ ${c(C.dim, "One JSON object per line. Field names are flexible:")}
 `);
   }
   if (summary.problematic > 0) process.exitCode = 1;
+}
+async function runInspect(paths, rest) {
+  const files = [...new Set(paths.flatMap(expandGlob))];
+  const records = [];
+  for (const f of files) records.push(...parseTaskRecords(readFileSync3(f, "utf8")).records);
+  if (records.length === 0) {
+    console.error("\nNo readable tasks. Usage: silentgreen inspect tasks.jsonl [--task <id>]");
+    process.exitCode = 1;
+    return;
+  }
+  const wanted = arg(rest, "--task");
+  const chosen = wanted ? records.filter((r) => r.id === wanted) : records;
+  if (chosen.length === 0) {
+    console.error(`
+No task with id "${wanted}". Ids: ${records.slice(0, 10).map((r) => r.id).join(", ")}${records.length > 10 ? ", ..." : ""}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (rest.includes("--json")) {
+    process.stdout.write(JSON.stringify(chosen.map(inspectTask), null, 2) + "\n");
+    return;
+  }
+  const inspections = chosen.map(inspectTask);
+  const target = wanted ? inspections : [inspections.find((i) => i.counts.ungrounded > 0) ?? inspections[0]];
+  for (const insp of target) {
+    rule(`Task ${insp.id}`);
+    console.log(`  ${c(C.green, String(insp.counts.grounded))} traced   ${c(C.red, String(insp.counts.ungrounded))} not in source   ${c(C.dim, `${insp.counts.checked} checkable`)}
+`);
+    console.log(c(C.dim, "  the answer, atom by atom"));
+    const painted = insp.segments.map((s) => s.kind === "grounded" ? c(C.green, s.text) : s.kind === "ungrounded" ? c(C.red, s.text) : s.text).join("");
+    console.log(indent(painted, "  "));
+    console.log("");
+    const bad = insp.segments.filter((s) => s.kind === "ungrounded");
+    if (bad.length > 0) {
+      console.log(c(C.dim, "  not found in the source"));
+      for (const s of bad) console.log(`  ${c(C.red, s.text)}  ${c(C.dim, s.why ?? "")}`);
+      console.log("");
+    }
+    for (const q of insp.quotes) {
+      const tag = q.grounded ? c(C.green, "in source") : c(C.red, "not in source");
+      console.log(`  quote (${tag}): ${c(C.dim, `"${q.text.slice(0, 120)}"`)}`);
+    }
+    if (insp.quotes.length > 0) console.log("");
+    if (insp.source) {
+      console.log(c(C.dim, "  the source it was given"));
+      let painted2 = insp.source;
+      for (const h of [...insp.sourceHighlights].sort((a, b) => b.start - a.start)) {
+        painted2 = painted2.slice(0, h.start) + c(C.green, painted2.slice(h.start, h.end)) + painted2.slice(h.end);
+      }
+      console.log(indent(painted2.slice(0, 1200), "  "));
+    } else {
+      console.log(c(C.yellow, `  ${insp.reason ?? insp.note ?? "No source was captured for this task."}`));
+    }
+    console.log("");
+  }
+  if (!wanted && inspections.length > 1) {
+    console.log(c(C.dim, `  ${inspections.length} tasks in the file. Inspect another: silentgreen inspect ${files[0]} --task <id>`));
+  }
+}
+function indent(s, pad) {
+  return s.split("\n").map((l) => pad + l).join("\n");
 }
 async function runContract(paths, rest) {
   const files = paths.filter((p) => !p.startsWith("-"));
@@ -5869,6 +6002,8 @@ async function main() {
       return runCheck(positional(rest), rest);
     case "contract":
       return runContract(positional(rest), rest);
+    case "inspect":
+      return runInspect(positional(rest), rest);
     case "eval":
       return runEval(rest);
     case "demo":
@@ -5907,6 +6042,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     --json                 machine-readable report on stdout
     --no-grounding         skip the groundedness check
   contract [files...]      draft a contract from a batch, for you to edit
+  inspect [files...]       one task, side by side: answer, source, every atom
+    --task ID              which task (default: the first with a fabrication)
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store

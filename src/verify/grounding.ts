@@ -33,6 +33,9 @@ export interface Atom {
   readonly text: string;
   /** Normalised for comparison. Two atoms match when these are equal. */
   readonly key: string;
+  /** Character offset of `text` in the answer it was extracted from. */
+  readonly start: number;
+  readonly end: number;
 }
 
 export interface UngroundedAtom extends Atom {
@@ -182,12 +185,15 @@ function spelledValue(span: string): number | null {
   return sawAny ? result + current : null;
 }
 
-export function spelledNumbers(text: string): { raw: string; value: number }[] {
-  const out: { raw: string; value: number }[] = [];
+export function spelledNumbers(text: string): { raw: string; value: number; start: number }[] {
+  const out: { raw: string; value: number; start: number }[] = [];
   for (const m of text.matchAll(SPELLED_RE)) {
     const raw = m[0].trim();
     const value = spelledValue(raw);
-    if (value !== null && value > TRIVIAL_NUMBER_MAX) out.push({ raw, value });
+    if (value !== null && value > TRIVIAL_NUMBER_MAX) {
+      const lead = m[0].length - m[0].trimStart().length;
+      out.push({ raw, value, start: (m.index ?? 0) + lead });
+    }
   }
   return out;
 }
@@ -200,9 +206,16 @@ export function spelledNumbers(text: string): { raw: string; value: number }[] {
  */
 export function extractAtoms(text: string): readonly Atom[] {
   if (!text) return [];
-  let remaining = text;
   const atoms: Atom[] = [];
   const seen = new Set<string>();
+
+  // Ranges of the original text already claimed by an atom, so a later, broader
+  // pattern does not re-match inside one (the number inside an email, a figure
+  // inside a quotation). Offsets are kept against the original text so any
+  // surface can highlight the exact span.
+  const consumed: [number, number][] = [];
+  const overlaps = (s: number, e: number) => consumed.some(([a, b]) => s < b && e > a);
+  const claim = (s: number, e: number) => consumed.push([s, e]);
 
   /**
    * Sentence punctuation that a greedy pattern will happily swallow.
@@ -214,18 +227,21 @@ export function extractAtoms(text: string): readonly Atom[] {
    */
   const trimTrailingPunctuation = (s: string): string => s.replace(/[.,;:!?)\]}'"»]+$/, '');
 
-  const push = (kind: AtomKind, rawIn: string, keyIn: string) => {
+  const push = (kind: AtomKind, rawIn: string, keyIn: string, start: number) => {
     let raw = rawIn;
     let key = keyIn;
+    let end = start + raw.length;
     if (kind === 'url' || kind === 'email' || kind === 'identifier') {
-      raw = trimTrailingPunctuation(raw);
+      const trimmed = trimTrailingPunctuation(raw);
+      end = start + trimmed.length;
+      raw = trimmed;
       key = trimTrailingPunctuation(key);
     }
     if (!raw) return;
     const id = `${kind}|${key}`;
     if (seen.has(id)) return;
     seen.add(id);
-    atoms.push({ kind, text: raw, key });
+    atoms.push({ kind, text: raw, key, start, end });
   };
 
   // Quotations come out of the original text, before anything is stripped. A
@@ -233,38 +249,45 @@ export function extractAtoms(text: string): readonly Atom[] {
   // or the quote is checked against the source with holes where its facts were.
   for (const m of text.matchAll(QUOTE_RE)) {
     const raw = m[1] ?? '';
-    if (raw) push('quote', raw, normaliseText(raw));
+    if (!raw) continue;
+    const inner = (m.index ?? 0) + m[0].indexOf(raw);
+    // The quote is matched whole against the source, but its inner atoms (a
+    // figure, a name) are still extracted and checked on their own, so an
+    // altered number inside quotation marks is caught. So the range is not
+    // claimed here.
+    push('quote', raw, normaliseText(raw), inner);
   }
 
   // Numbers written as words, keyed by their value so they match digit forms.
-  for (const { raw, value } of spelledNumbers(text)) {
-    push('number', raw, String(value));
-    remaining = remaining.split(raw).join(' ');
+  for (const { raw, value, start } of spelledNumbers(text)) {
+    if (overlaps(start, start + raw.length)) continue;
+    push('number', raw, String(value), start);
+    claim(start, start + raw.length);
   }
 
   for (const { kind, re } of PATTERNS) {
-    const found: string[] = [];
-    for (const m of remaining.matchAll(new RegExp(re.source, re.flags))) {
+    for (const m of text.matchAll(new RegExp(re.source, re.flags))) {
       const raw = m[0];
-      if (!raw) continue;
-      found.push(m[0]);
+      const start = m.index ?? 0;
+      if (!raw || overlaps(start, start + raw.length)) continue;
 
       if (kind === 'number' || kind === 'money') {
         const n = Number(normaliseNumber(raw));
         // Small integers are counts and list positions, not claims.
         if (kind === 'number' && Number.isFinite(n) && Math.abs(n) <= TRIVIAL_NUMBER_MAX && !raw.includes('.')) continue;
-        push(kind, raw, normaliseNumber(raw));
+        push(kind, raw, normaliseNumber(raw), start);
       } else {
-        push(kind, raw, normaliseText(raw));
+        push(kind, raw, normaliseText(raw), start);
       }
+      claim(start, start + raw.length);
     }
-    // Remove what we matched so later, broader patterns do not re-match inside it.
-    for (const f of found) remaining = remaining.split(f).join(' ');
   }
 
   // Capitalised runs, which is where invented people, companies and products live.
-  for (const m of remaining.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
+  for (const m of text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,3})\b/g)) {
     const raw = m[1] ?? '';
+    const start = (m.index ?? 0) + m[0].indexOf(raw);
+    if (!raw || overlaps(start, start + raw.length)) continue;
     const words = raw.split(/\s+/);
 
     if (words.length === 1) {
@@ -274,12 +297,13 @@ export function extractAtoms(text: string): readonly Atom[] {
       // Without this, "Payment is due..." reports an invented entity called
       // Payment, and one such accusation costs more trust than ten real catches
       // earn. A name that matters will almost always also occur mid-sentence.
-      const before = remaining.slice(Math.max(0, (m.index ?? 0) - 40), m.index ?? 0);
+      const before = text.slice(Math.max(0, start - 40), start);
       if (/(^|[.!?:;•\-])\s*$/.test(before) || /\n\s*$/.test(before)) continue;
     } else if (words.every((w) => NOT_NAMES.has(w.toLowerCase()))) {
       continue;
     }
-    push('name', raw, normaliseText(raw));
+    push('name', raw, normaliseText(raw), start);
+    claim(start, start + raw.length);
   }
 
   return atoms;

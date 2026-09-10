@@ -58,6 +58,8 @@ export const taskResult = pgTable('task_result', {
   taskId: text('task_id').notNull(),
   verdict: text('verdict').notNull(), // clean | problem | inconclusive
   atomsChecked: integer('atoms_checked').notNull().default(0),
+  /** Length of the answer only. Lets a redacted surface draw the shape, not the text. */
+  answerChars: integer('answer_chars').notNull().default(0),
   inconclusiveReason: text('inconclusive_reason'),
   at: timestamp('at'),
 });
@@ -75,6 +77,8 @@ export const problem = pgTable('problem', {
   kind: text('kind').notNull(),
   summary: text('summary').notNull(),
   evidenceRedacted: text('evidence_redacted').notNull(),
+  /** Character span in the answer for a fabricated atom: offsets and kind, no value. */
+  span: jsonb('span'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

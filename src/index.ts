@@ -42,6 +42,14 @@ export { checkGrounding, extractAtoms, type GroundingResult, type Atom, type Ato
 export { checkConsistency, type Inconsistency, type InconsistencyKind } from './verify/consistency';
 export { checkConformance, type Malformed, type MalformedKind } from './verify/conformance';
 export { checkAssociation, type Misassociation } from './verify/association';
+export {
+  inspectTask,
+  type TaskInspection,
+  type AnswerSegment,
+  type SegmentKind,
+  type SourceHighlight,
+  type QuoteFinding,
+} from './verify/inspect';
 export { checkDistribution, type BatchSignal, type BatchSignalKind, type TaskSignal } from './verify/distribution';
 
 // The contract layer (Tier 2): rules a human wrote down, checked deterministically.

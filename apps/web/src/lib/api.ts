@@ -50,6 +50,7 @@ export interface ProblemRow {
   kind: string;
   summary: string;
   evidenceRedacted: string;
+  span?: { start: number; end: number; atomKind: string } | null;
 }
 
 export interface TaskResultRow {
@@ -57,6 +58,7 @@ export interface TaskResultRow {
   taskId: string;
   verdict: 'clean' | 'problem' | 'inconclusive';
   atomsChecked: number;
+  answerChars?: number;
   inconclusiveReason: string | null;
   at: string | null;
   problems: ProblemRow[];
@@ -65,4 +67,9 @@ export interface TaskResultRow {
 export interface BatchDetail {
   batch: BatchRow & { projectId: string; unreadableLines: number };
   tasks: TaskResultRow[];
+}
+
+export interface TaskDetail {
+  batch: { id: string; projectId: string; source: string | null };
+  task: TaskResultRow & { answerChars: number };
 }

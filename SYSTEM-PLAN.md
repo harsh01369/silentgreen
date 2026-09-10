@@ -338,6 +338,14 @@ not just in the browser.
 One task, side by side: the answer on the left with every atom highlighted, the source on
 the right, green for grounded, red for absent, with the reason under each red one.
 
+Built. `inspectTask` in the engine returns the answer segmented into
+`plain` / `grounded` / `ungrounded` runs (with character offsets), the source
+with the matched spans located, and the quotations reported whole. `silentgreen
+inspect tasks.jsonl` renders it in the terminal. The hosted version is redacted:
+the answer text is not stored, so the page draws a skeleton of the answer length
+with the finding spans marked and the reasons beneath, and points the user at
+the local CLI for the full text.
+
 ### 7.5 CI annotations
 
 A GitHub Action that comments on a PR: "this change alters the prompt for `billing-agent`;
@@ -430,12 +438,18 @@ real batches that neither the builder nor a fixture author wrote.
 
 ### Phase 2: the hosted free tier
 
-**Status.** apps/api scaffolded (Express, Drizzle, Better Auth, ingest, ledger)
-and apps/web scaffolded (Next.js, the marketing site with a 3D hero, the
-session-gated dashboard with org/project/key creation). Both typecheck and
-build. Not yet deployed: needs a live Neon URL and the Railway and Vercel
-projects. The task inspector and session-auth batch drill-down are the next
-build items.
+**Status.** Code complete, not deployed. `apps/api` (Express, Drizzle, Better
+Auth, ingest, ledger) exposes projects, `POST /v1/batches`, the project summary,
+the batch drill-down and `GET /v1/batches/:id/tasks/:taskId`. `apps/web` (Next.js)
+has the rebuilt marketing site (an evidence exhibit, no 3D), the session-gated
+dashboard, the batch page with the batch-shape signals, and the task inspector
+page (a redacted skeleton of the answer with the finding spans marked, since the
+free tier never stores the value). Both typecheck and build. Deployment needs a
+live Neon URL and the Railway and Vercel projects.
+
+The engine now has `inspectTask` (the side-by-side data) and `silentgreen
+inspect`, so the full answer-beside-source view with every atom lit runs locally
+where the data never leaves the machine; the hosted page is the redacted view.
 
 **Infrastructure, decided.**
 

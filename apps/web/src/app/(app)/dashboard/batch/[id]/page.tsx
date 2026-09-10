@@ -106,22 +106,22 @@ function BatchView({ data }: { data: BatchDetail }) {
 
       <ol className="space-y-3">
         {sorted.map((t) => (
-          <TaskRow key={t.id} task={t} />
+          <TaskRow key={t.id} task={t} batchId={batch.id} />
         ))}
       </ol>
     </div>
   );
 }
 
-function TaskRow({ task }: { task: TaskResultRow }) {
+function TaskRow({ task, batchId }: { task: TaskResultRow; batchId: string }) {
   const meta = VERDICT_META[task.verdict];
   return (
     <li className="panel rounded-xl p-5">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <Link href={`/dashboard/batch/${batchId}/task/${task.taskId}`} className="flex items-center gap-3 hover:opacity-80">
           <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-          <code className="font-mono text-sm text-ink">{task.taskId}</code>
-        </div>
+          <code className="font-mono text-sm text-ink underline decoration-rule underline-offset-4">{task.taskId}</code>
+        </Link>
         <span className={`font-mono text-xs ${meta.tone}`}>{meta.label}</span>
       </div>
 

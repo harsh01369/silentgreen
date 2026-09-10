@@ -32,6 +32,7 @@ import { parseTaskRecords, type TaskRecord } from './aiwork/record';
 import { checkBatch } from './aiwork/check';
 import { parseContract, evaluateContract, type ContractReport } from './aiwork/contract';
 import { draftContract } from './aiwork/contract-draft';
+import { inspectTask } from './verify/inspect';
 import { demoTasks } from './aiwork/demo';
 import { builtinBatches } from './eval/corpus';
 import { scoreBatch, gate, DEFAULT_GATE } from './eval/score';
@@ -75,7 +76,7 @@ function arg(rest: readonly string[], flag: string): string | undefined {
 }
 
 /** Flags that take a following value, so it is not mistaken for a positional path. */
-const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port']);
+const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port', '--task']);
 
 function positional(rest: readonly string[]): string[] {
   const out: string[] = [];
@@ -468,6 +469,83 @@ ${c(C.dim, 'One JSON object per line. Field names are flexible:')}
   }
 
   if (summary.problematic > 0) process.exitCode = 1;
+}
+
+/* --------------------------------------------------------------- inspect -- */
+
+async function runInspect(paths: readonly string[], rest: readonly string[]): Promise<void> {
+  const files = [...new Set(paths.flatMap(expandGlob))];
+  const records: TaskRecord[] = [];
+  for (const f of files) records.push(...parseTaskRecords(readFileSync(f, 'utf8')).records);
+  if (records.length === 0) {
+    console.error('\nNo readable tasks. Usage: silentgreen inspect tasks.jsonl [--task <id>]');
+    process.exitCode = 1;
+    return;
+  }
+
+  const wanted = arg(rest, '--task');
+  const chosen = wanted ? records.filter((r) => r.id === wanted) : records;
+  if (chosen.length === 0) {
+    console.error(`\nNo task with id "${wanted}". Ids: ${records.slice(0, 10).map((r) => r.id).join(', ')}${records.length > 10 ? ', ...' : ''}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (rest.includes('--json')) {
+    process.stdout.write(JSON.stringify(chosen.map(inspectTask), null, 2) + '\n');
+    return;
+  }
+
+  // Without --task, show the first task that carries a fabrication, else the first.
+  const inspections = chosen.map(inspectTask);
+  const target = wanted ? inspections : [inspections.find((i) => i.counts.ungrounded > 0) ?? inspections[0]!];
+
+  for (const insp of target) {
+    rule(`Task ${insp.id}`);
+    console.log(`  ${c(C.green, String(insp.counts.grounded))} traced   ${c(C.red, String(insp.counts.ungrounded))} not in source   ${c(C.dim, `${insp.counts.checked} checkable`)}\n`);
+
+    console.log(c(C.dim, '  the answer, atom by atom'));
+    const painted = insp.segments
+      .map((s) => (s.kind === 'grounded' ? c(C.green, s.text) : s.kind === 'ungrounded' ? c(C.red, s.text) : s.text))
+      .join('');
+    console.log(indent(painted, '  '));
+    console.log('');
+
+    const bad = insp.segments.filter((s) => s.kind === 'ungrounded');
+    if (bad.length > 0) {
+      console.log(c(C.dim, '  not found in the source'));
+      for (const s of bad) console.log(`  ${c(C.red, s.text)}  ${c(C.dim, s.why ?? '')}`);
+      console.log('');
+    }
+    for (const q of insp.quotes) {
+      const tag = q.grounded ? c(C.green, 'in source') : c(C.red, 'not in source');
+      console.log(`  quote (${tag}): ${c(C.dim, `"${q.text.slice(0, 120)}"`)}`);
+    }
+    if (insp.quotes.length > 0) console.log('');
+
+    if (insp.source) {
+      console.log(c(C.dim, '  the source it was given'));
+      let painted2 = insp.source;
+      for (const h of [...insp.sourceHighlights].sort((a, b) => b.start - a.start)) {
+        painted2 = painted2.slice(0, h.start) + c(C.green, painted2.slice(h.start, h.end)) + painted2.slice(h.end);
+      }
+      console.log(indent(painted2.slice(0, 1200), '  '));
+    } else {
+      console.log(c(C.yellow, `  ${insp.reason ?? insp.note ?? 'No source was captured for this task.'}`));
+    }
+    console.log('');
+  }
+
+  if (!wanted && inspections.length > 1) {
+    console.log(c(C.dim, `  ${inspections.length} tasks in the file. Inspect another: silentgreen inspect ${files[0]} --task <id>`));
+  }
+}
+
+function indent(s: string, pad: string): string {
+  return s
+    .split('\n')
+    .map((l) => pad + l)
+    .join('\n');
 }
 
 /* -------------------------------------------------------------- contract -- */
@@ -1016,6 +1094,8 @@ async function main(): Promise<void> {
       return runCheck(positional(rest), rest);
     case 'contract':
       return runContract(positional(rest), rest);
+    case 'inspect':
+      return runInspect(positional(rest), rest);
     case 'eval':
       return runEval(rest);
     case 'demo':
@@ -1055,6 +1135,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     --json                 machine-readable report on stdout
     --no-grounding         skip the groundedness check
   contract [files...]      draft a contract from a batch, for you to edit
+  inspect [files...]       one task, side by side: answer, source, every atom
+    --task ID              which task (default: the first with a fabrication)
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store

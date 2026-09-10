@@ -243,6 +243,35 @@ app.get(
   }),
 );
 
+// One task: the redacted inspector. On the free tier this is the shape of every
+// finding, never the value. The answer text is not stored, so the surface draws
+// a skeleton of `answerChars` with the finding spans marked.
+app.get(
+  '/v1/batches/:id/tasks/:taskId',
+  guard(async (req, res, who) => {
+    const [b] = await db
+      .select()
+      .from(batch)
+      .where(eq(batch.id, req.params.id ?? ''))
+      .limit(1);
+    if (!b || !(await resolveProject(who.organizationId, b.projectId))) {
+      res.status(404).json({ error: 'Batch not found.' });
+      return;
+    }
+    const [t] = await db
+      .select()
+      .from(taskResult)
+      .where(and(eq(taskResult.batchId, b.id), eq(taskResult.taskId, req.params.taskId ?? '')))
+      .limit(1);
+    if (!t) {
+      res.status(404).json({ error: 'Task not found in this batch.' });
+      return;
+    }
+    const problems = await db.select().from(problem).where(eq(problem.taskResultId, t.id));
+    res.json({ batch: { id: b.id, projectId: b.projectId, source: b.source }, task: { ...t, problems } });
+  }),
+);
+
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on our side.' });

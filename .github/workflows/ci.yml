@@ -35,7 +35,9 @@ jobs:
           sed -i 's/TODO:.*/Harsh, CI fixture, these rules describe the demo pipeline"/' ci.sg.yaml
           npm run --silent dev -- check ci-demo.jsonl --contract ci.sg.yaml --json > cr.json || true
           node -e 'const j=require("./cr.json"); if(!j.contract||j.contract.pipeline!=="ci") throw new Error("contract not in report")'
-          rm -f ci-demo.jsonl ci.sg.yaml report.json cr.json
+          npm run --silent dev -- inspect ci-demo.jsonl --task task-004 --json > in.json
+          node -e 'const j=require("./in.json")[0]; if(j.segments.map(s=>s.text).join("")!==j.answer) throw new Error("inspect segments do not reassemble"); if(j.counts.ungrounded!==4) throw new Error("inspect ungrounded count changed: "+j.counts.ungrounded)'
+          rm -f ci-demo.jsonl ci.sg.yaml report.json cr.json in.json
 
       - name: build
         run: npm run build
