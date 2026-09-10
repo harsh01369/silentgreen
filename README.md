@@ -143,6 +143,20 @@ would call `proven` is reported `unproven` with a re-confirm message, because a 
 result about a prompt that no longer exists is exactly what this tool refuses to give.
 The GitHub Action takes `contract` and `prompt` inputs and turns this into a PR comment.
 
+### The evidence record
+
+```bash
+silentgreen report tasks.jsonl --contract billing.sg.yaml --client "Fernweh Supply Ltd" --out record.html
+```
+
+A single self-contained HTML file, no external assets, no scripts, printable. It leads with
+what these checks can and cannot show, then the result, the batch-shape signals, every
+finding, the contract result with its attestation and any staleness, and a record-keeping
+section carrying a hash computed deterministically from the batch and the check versions.
+Redacted by default: the kind, shape and character offsets of each finding, never the
+value. `--full` keeps the values. This is the document you hand to the client, or to
+whoever is asking whether the AI decisions were checked.
+
 ### What the worked example finds
 
 Twenty answers. Every one was recorded as a completed task, and every one reads as helpful.

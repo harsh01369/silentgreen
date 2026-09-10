@@ -547,9 +547,20 @@ then the marketing site. The 3D frontend is a parallel track with its own design
 
 ### Phase 6: the compliance surface
 
-- Evidence export shaped for the EU AI Act and ISO 42001 obligations that land on anyone
-  putting AI decisions in front of customers in 2026. This is where the agency urgency and
-  the willingness to pay concentrate.
+- [done] The evidence record for a batch of AI work: `silentgreen report
+  tasks.jsonl [--contract c.yaml] [--prompt p.txt] [--client NAME] [--full]`
+  writes a self-contained HTML document, no external assets, no scripts. It
+  leads with the coverage statement, then the result, the batch-shape signals,
+  every finding (redacted to the shape and character offsets by default, `--full`
+  for the values), the contract result with the attestation and any staleness,
+  and a record-keeping section carrying a deterministic hash of the batch and
+  the check versions. `renderEvidenceReport` / `evidenceHash` are exported from
+  the engine.
+- [open] Map the record's sections explicitly to EU AI Act Article 12
+  (record-keeping) and ISO 42001 clauses, with a reviewer's sign-off block. The
+  document is the right shape; the framing text is generic for now.
+- [open] Hosted export: the same document from a stored batch and its ledger
+  entry, so the hash in the report is the hash in the chain.
 
 ---
 

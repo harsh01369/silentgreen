@@ -3653,12 +3653,12 @@ function locateJson(s) {
   const close = open === "{" ? "}" : "]";
   let depth = 0;
   let inStr = false;
-  let esc2 = false;
+  let esc3 = false;
   for (let i = first; i < s.length; i++) {
     const ch = s[i];
     if (inStr) {
-      if (esc2) esc2 = false;
-      else if (ch === "\\") esc2 = true;
+      if (esc3) esc3 = false;
+      else if (ch === "\\") esc3 = true;
       else if (ch === '"') inStr = false;
       continue;
     }
@@ -4543,6 +4543,141 @@ function draftContract(records, pipelineOrOpts = "pipeline") {
   return lines.join("\n") + "\n";
 }
 
+// src/aiwork/report.ts
+import { createHash as createHash5 } from "node:crypto";
+var CHECK_VERSION = "silentgreen/checks@1";
+function esc2(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function redactEvidence(kind, evidence) {
+  const len = evidence.trim().length;
+  if (kind === "ungrounded") {
+    const shape = /@/.test(evidence) ? "an email address" : /https?:\/\//.test(evidence) ? "a URL" : /[£$€¥]|\b(?:GBP|USD|EUR|INR)\b/.test(evidence) ? "a monetary amount" : /^\d{4}-\d{2}-\d{2}/.test(evidence.trim()) ? "a date" : /^[A-Z0-9][A-Z0-9-]{3,}$/.test(evidence.trim()) ? "an identifier" : "a value";
+    return `${shape}, ${len} characters, absent from the source`;
+  }
+  return `${kind}, ${len} characters of output`;
+}
+function evidenceHash(input, summary) {
+  const material = JSON.stringify({
+    v: CHECK_VERSION,
+    label: input.batchLabel,
+    tasks: input.records.map((r) => ({
+      id: r.id,
+      out: createHash5("sha256").update(r.output).digest("hex"),
+      src: createHash5("sha256").update(groundingSourcesFor(r).sources.join("\n")).digest("hex")
+    })),
+    result: { total: summary.total, clean: summary.clean, problematic: summary.problematic, inconclusive: summary.inconclusive, byKind: summary.byKind },
+    contract: input.contract ? { pipeline: input.contract.contract.pipeline, stale: input.contract.stale, summary: input.contract.summary } : null
+  });
+  return createHash5("sha256").update(material).digest("hex");
+}
+var CSS = `
+:root{--ink:#1a1c1a;--soft:#565853;--faint:#797b73;--rule:#c9c6ba;--traced:#2f6b4a;--absent:#9a3327;--withheld:#767871;--ground:#faf9f6}
+*{box-sizing:border-box}
+body{margin:0;background:#eceeeb;color:var(--ink);font:16px/1.6 Georgia,'Iowan Old Style',serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+main{max-width:46rem;margin:0 auto;padding:3rem 1.5rem 6rem;background:var(--ground);min-height:100vh}
+h1{font-size:1.6rem;margin:0 0 .25rem;letter-spacing:-.01em}
+h2{font-size:1.05rem;margin:2.5rem 0 .75rem;border-bottom:1px solid var(--rule);padding-bottom:.35rem}
+.mono{font-family:'IBM Plex Mono',ui-monospace,Menlo,monospace;font-size:.8rem}
+.meta{color:var(--faint);font-size:.85rem}
+.lead{background:#fff;border:1px solid var(--rule);padding:1rem 1.15rem;margin:1.5rem 0;font-size:.95rem}
+table{width:100%;border-collapse:collapse;margin:.5rem 0;font-size:.9rem}
+td,th{text-align:left;padding:.4rem .5rem;border-bottom:1px solid var(--rule)}
+th{color:var(--faint);font-weight:400;font-size:.8rem;text-transform:uppercase;letter-spacing:.03em}
+.v-proven{color:var(--traced)}.v-violated{color:var(--absent)}.v-unproven{color:var(--withheld)}
+.finding{border-left:3px solid var(--absent);padding:.5rem 0 .5rem .9rem;margin:.85rem 0}
+.finding .id{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:.8rem;color:var(--faint)}
+.signal{border-left:3px solid var(--withheld);padding:.35rem 0 .35rem .9rem;margin:.6rem 0;font-size:.9rem}
+.stale{background:#fbeee9;border:1px solid var(--absent);padding:.75rem 1rem;margin:1rem 0;font-size:.9rem}
+.hash{font-family:'IBM Plex Mono',ui-monospace,monospace;font-size:.72rem;word-break:break-all;color:var(--soft)}
+.foot{margin-top:3rem;border-top:1px solid var(--rule);padding-top:1rem;color:var(--faint);font-size:.8rem}
+@media print{body{background:#fff}main{padding:0}}
+`;
+function renderEvidenceReport(input) {
+  const redact = input.redact ?? true;
+  const { results, summary } = checkBatch(input.records);
+  const hash = evidenceHash(input, summary);
+  const now = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  const violated2 = results.filter((r) => r.problems.length > 0);
+  const rows = (r) => r.problems.map((p) => {
+    const ev = redact ? redactEvidence(p.kind, p.evidence) : p.evidence;
+    const at = p.span ? ` <span class="mono">(chars ${p.span.start}\u2013${p.span.end})</span>` : "";
+    const summary2 = redact && p.kind === "ungrounded" && p.span ? `A ${p.span.atomKind} in the answer appears nowhere in the source material.` : p.summary;
+    return `<div><span class="mono">${esc2(p.kind)}</span>${at}<br>${esc2(summary2)}<br><span class="meta">${esc2(ev)}</span></div>`;
+  }).join('<hr style="border:0;border-top:1px dotted #ccc;margin:.5rem 0">');
+  const contractBlock = input.contract ? renderContract(input.contract, redact) : "";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evidence record \u2014 ${esc2(input.batchLabel)}</title>
+<style>${CSS}</style></head><body><main>
+
+<h1>silentgreen evidence record</h1>
+<p class="meta">
+${input.clientName ? `Prepared for ${esc2(input.clientName)}. ` : ""}
+${input.preparedBy ? `Prepared by ${esc2(input.preparedBy)}. ` : ""}
+Issued ${now}.${input.periodLabel ? ` Covering ${esc2(input.periodLabel)}.` : ""}<br>
+Batch: <span class="mono">${esc2(input.batchLabel)}</span>
+</p>
+
+<div class="lead">
+<strong>What these checks can and cannot show.</strong><br>
+${esc2(summary.caveat)}
+</div>
+
+<h2>Result</h2>
+<table>
+<tr><th>Verdict</th><th>Count</th><th></th></tr>
+<tr><td class="v-proven">proven</td><td>${summary.clean}</td><td class="meta">no detectable problem, checked against the material the model was given</td></tr>
+<tr><td class="v-violated">violated</td><td>${summary.problematic}</td><td class="meta">a fact absent from the source, or a degenerate, deferred, contradictory or malformed answer</td></tr>
+<tr><td class="v-unproven">unproven</td><td>${summary.inconclusive}</td><td class="meta">not enough captured to decide either way</td></tr>
+<tr><td><strong>total</strong></td><td><strong>${summary.total}</strong></td><td></td></tr>
+</table>
+
+${summary.signals.length > 0 ? `<h2>Across the batch</h2>${summary.signals.map((s) => `<div class="signal"><strong>${esc2(s.kind)}</strong> \u2014 ${esc2(s.summary)}${s.sampleTaskIds.length ? `<br><span class="meta mono">e.g. ${esc2(s.sampleTaskIds.join(", "))}</span>` : ""}</div>`).join("")}` : ""}
+
+<h2>Findings (${violated2.length})</h2>
+${violated2.length === 0 ? '<p class="meta">No answer in this batch carried a problem these checks can detect. This is not a statement that the answers are correct.</p>' : violated2.map((r) => `<div class="finding"><span class="id">${esc2(r.id)}</span>${rows(r)}</div>`).join("")}
+
+${contractBlock}
+
+<h2>Record-keeping</h2>
+<p class="meta">
+This document corresponds to a deterministic hash of the batch contents and the check
+versions (<span class="mono">${CHECK_VERSION}</span>). Running the same batch through the
+same version of silentgreen produces the same hash. A changed answer, source, or verdict
+produces a different one.
+</p>
+<p class="hash">${hash}</p>
+${redact ? '<p class="meta">Evidence in this record is redacted: the kind and shape of each finding is kept, never the personal value inside it. The full text is available from the local run.</p>' : '<p class="meta">This record contains full evidence, including values drawn from the source material. Handle accordingly.</p>'}
+
+<div class="foot">
+Generated by silentgreen. No language model was asked to grade another language model;
+every verdict here is a deterministic comparison against text the model did not write.
+</div>
+
+</main></body></html>`;
+}
+function maskDetail(s) {
+  return s.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[address]").replace(/\bhttps?:\/\/\S+/g, "[link]").replace(/[£$€¥]\s?\d[\d,]*(?:\.\d+)?|\b\d{4}-\d{2}-\d{2}\b|\b\d[\d,]*\.\d+\b/g, "[value]");
+}
+function renderContract(cr, redact) {
+  const broken = cr.tasks.filter((t) => t.verdict === "violated");
+  const detail = (d) => redact ? maskDetail(d) : d;
+  return `
+<h2>Against the contract: ${esc2(cr.contract.pipeline)}</h2>
+${cr.stale ? `<div class="stale">${esc2(cr.staleReason)}</div>` : ""}
+<p class="meta">Basis: ${esc2(cr.contract.basis)}. Attestation: ${esc2(cr.contract.attests)}</p>
+<table>
+<tr><th>Verdict</th><th>Tasks</th></tr>
+<tr><td class="v-proven">proven</td><td>${cr.summary.proven}</td></tr>
+<tr><td class="v-violated">violated</td><td>${cr.summary.violated}</td></tr>
+<tr><td class="v-unproven">unproven</td><td>${cr.summary.unproven}</td></tr>
+</table>
+${broken.length === 0 ? "" : broken.slice(0, 50).map(
+    (t) => `<div class="finding"><span class="id">${esc2(t.id)}</span>${t.clauses.filter((c2) => c2.verdict === "violated").map((c2) => `<div>${esc2(c2.clause)}: ${esc2(detail(c2.detail))}${c2.evidence && !redact ? `<br><span class="meta">${esc2(c2.evidence)}</span>` : ""}</div>`).join("")}</div>`
+  ).join("")}`;
+}
+
 // src/verify/inspect.ts
 function isContainer(a, all) {
   return all.some((b) => b !== a && b.start >= a.start && b.end <= a.end && b.end - b.start < a.end - a.start);
@@ -5170,7 +5305,7 @@ function arg(rest, flag) {
   const i = rest.indexOf(flag);
   return i >= 0 ? rest[i + 1] : void 0;
 }
-var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port", "--task", "--prompt"]);
+var VALUE_FLAGS = /* @__PURE__ */ new Set(["--contract", "--store", "--name", "--out", "--client", "--interval", "--port", "--task", "--prompt", "--by", "--period"]);
 function positional(rest) {
   const out = [];
   for (let i = 0; i < rest.length; i++) {
@@ -5589,6 +5724,44 @@ No task with id "${wanted}". Ids: ${records.slice(0, 10).map((r) => r.id).join("
 }
 function indent(s, pad) {
   return s.split("\n").map((l) => pad + l).join("\n");
+}
+async function runEvidenceReport(paths, rest) {
+  const files = [...new Set(paths.flatMap(expandGlob))];
+  const records = [];
+  for (const f of files) records.push(...parseTaskRecords(readFileSync3(f, "utf8")).records);
+  if (records.length === 0) {
+    console.error('\nNo readable tasks. Usage: silentgreen report tasks.jsonl [--contract c.yaml] [--prompt p.txt] [--out record.html] [--client "Name"] [--full]');
+    process.exitCode = 1;
+    return;
+  }
+  let contractReport;
+  const contractPath = arg(rest, "--contract");
+  if (contractPath) {
+    const { contract, errors } = parseContract(readFileSync3(contractPath, "utf8"), contractPath);
+    if (!contract) {
+      console.error(`
+The contract could not be read:
+${errors.map((e) => `  ${e}`).join("\n")}`);
+      process.exitCode = 1;
+      return;
+    }
+    const promptPath = arg(rest, "--prompt");
+    const promptText = promptPath ? readFileSync3(promptPath, "utf8") : void 0;
+    contractReport = evaluateContract(contract, records, promptText !== void 0 ? { promptText } : {});
+  }
+  const html = renderEvidenceReport({
+    records,
+    batchLabel: files.length === 1 ? files[0] ?? "batch" : `${files.length} files`,
+    redact: !rest.includes("--full"),
+    ...arg(rest, "--client") ? { clientName: arg(rest, "--client") } : {},
+    ...arg(rest, "--by") ? { preparedBy: arg(rest, "--by") } : {},
+    ...arg(rest, "--period") ? { periodLabel: arg(rest, "--period") } : {},
+    ...contractReport ? { contract: contractReport } : {}
+  });
+  const out = arg(rest, "--out") ?? "silentgreen-evidence.html";
+  writeFileSync2(out, html);
+  console.log(`
+Evidence record written to ${out} (${rest.includes("--full") ? "full evidence" : "redacted"}).`);
 }
 async function runContract(paths, rest) {
   const files = paths.filter((p) => !p.startsWith("-"));
@@ -6077,8 +6250,11 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
       return new Promise(() => {
       });
     }
-    case "report":
+    case "report": {
+      const paths = positional(rest);
+      if (paths.length > 0) return runEvidenceReport(paths, rest);
       return runReport(storeDir, arg(rest, "--out") ?? "silentgreen-report.html", arg(rest, "--client"));
+    }
     case "help":
     case "--help":
     case "-h":
@@ -6093,6 +6269,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     --prompt FILE          bind the contract to this prompt file
   inspect [files...]       one task, side by side: answer, source, every atom
     --task ID              which task (default: the first with a fabrication)
+  report [files...]        a self-contained evidence record (HTML)
+    --contract F  --prompt F  --client NAME  --by NAME  --out F  --full
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store
@@ -6100,7 +6278,7 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
   review [--port 4666]     open the review interface to confirm them
   verify [--notify]        check recent runs against confirmed expectations
   watch [--interval 300]   keep checking, and alert when something changes
-  report [--out f.html]    produce the client evidence record
+  report (no files)        the n8n client evidence record from the local store
   status                   what is in the store
 
   --store DIR              where to keep state (default ${STORE_DIR}/)

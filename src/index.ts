@@ -67,7 +67,8 @@ export {
   type ActionRule,
   type EvaluateOptions,
 } from './aiwork/contract';
-export { draftContract } from './aiwork/contract-draft';
+export { draftContract, type DraftOptions } from './aiwork/contract-draft';
+export { renderEvidenceReport, evidenceHash, type EvidenceReportInput } from './aiwork/report';
 export { parseYaml, type YamlValue } from './util/yaml';
 
 // The worked example.

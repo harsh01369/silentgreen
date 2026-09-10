@@ -32,6 +32,7 @@ import { parseTaskRecords, type TaskRecord } from './aiwork/record';
 import { checkBatch } from './aiwork/check';
 import { parseContract, evaluateContract, type ContractReport } from './aiwork/contract';
 import { draftContract } from './aiwork/contract-draft';
+import { renderEvidenceReport } from './aiwork/report';
 import { inspectTask } from './verify/inspect';
 import { demoTasks } from './aiwork/demo';
 import { builtinBatches } from './eval/corpus';
@@ -76,7 +77,7 @@ function arg(rest: readonly string[], flag: string): string | undefined {
 }
 
 /** Flags that take a following value, so it is not mistaken for a positional path. */
-const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port', '--task', '--prompt']);
+const VALUE_FLAGS = new Set(['--contract', '--store', '--name', '--out', '--client', '--interval', '--port', '--task', '--prompt', '--by', '--period']);
 
 function positional(rest: readonly string[]): string[] {
   const out: string[] = [];
@@ -553,6 +554,47 @@ function indent(s: string, pad: string): string {
     .split('\n')
     .map((l) => pad + l)
     .join('\n');
+}
+
+/* ---------------------------------------------------------------- report -- */
+
+async function runEvidenceReport(paths: readonly string[], rest: readonly string[]): Promise<void> {
+  const files = [...new Set(paths.flatMap(expandGlob))];
+  const records: TaskRecord[] = [];
+  for (const f of files) records.push(...parseTaskRecords(readFileSync(f, 'utf8')).records);
+  if (records.length === 0) {
+    console.error('\nNo readable tasks. Usage: silentgreen report tasks.jsonl [--contract c.yaml] [--prompt p.txt] [--out record.html] [--client "Name"] [--full]');
+    process.exitCode = 1;
+    return;
+  }
+
+  let contractReport: ContractReport | undefined;
+  const contractPath = arg(rest, '--contract');
+  if (contractPath) {
+    const { contract, errors } = parseContract(readFileSync(contractPath, 'utf8'), contractPath);
+    if (!contract) {
+      console.error(`\nThe contract could not be read:\n${errors.map((e) => `  ${e}`).join('\n')}`);
+      process.exitCode = 1;
+      return;
+    }
+    const promptPath = arg(rest, '--prompt');
+    const promptText = promptPath ? readFileSync(promptPath, 'utf8') : undefined;
+    contractReport = evaluateContract(contract, records, promptText !== undefined ? { promptText } : {});
+  }
+
+  const html = renderEvidenceReport({
+    records,
+    batchLabel: files.length === 1 ? (files[0] ?? 'batch') : `${files.length} files`,
+    redact: !rest.includes('--full'),
+    ...(arg(rest, '--client') ? { clientName: arg(rest, '--client') } : {}),
+    ...(arg(rest, '--by') ? { preparedBy: arg(rest, '--by') } : {}),
+    ...(arg(rest, '--period') ? { periodLabel: arg(rest, '--period') } : {}),
+    ...(contractReport ? { contract: contractReport } : {}),
+  });
+
+  const out = arg(rest, '--out') ?? 'silentgreen-evidence.html';
+  writeFileSync(out, html);
+  console.log(`\nEvidence record written to ${out} (${rest.includes('--full') ? 'full evidence' : 'redacted'}).`);
 }
 
 /* -------------------------------------------------------------- contract -- */
@@ -1136,8 +1178,11 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
         /* hold the process open until interrupted */
       });
     }
-    case 'report':
+    case 'report': {
+      const paths = positional(rest);
+      if (paths.length > 0) return runEvidenceReport(paths, rest);
       return runReport(storeDir, arg(rest, '--out') ?? 'silentgreen-report.html', arg(rest, '--client'));
+    }
     case 'help':
     case '--help':
     case '-h':
@@ -1152,6 +1197,8 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
     --prompt FILE          bind the contract to this prompt file
   inspect [files...]       one task, side by side: answer, source, every atom
     --task ID              which task (default: the first with a fabrication)
+  report [files...]        a self-contained evidence record (HTML)
+    --contract F  --prompt F  --client NAME  --by NAME  --out F  --full
   eval [--verbose]         score the checks against the labelled corpus
   demo                     the n8n worked example, printed
   seed                     load that example into a local store
@@ -1159,7 +1206,7 @@ Nothing can raise an alert until you do. Press Ctrl+C to stop.
   review [--port 4666]     open the review interface to confirm them
   verify [--notify]        check recent runs against confirmed expectations
   watch [--interval 300]   keep checking, and alert when something changes
-  report [--out f.html]    produce the client evidence record
+  report (no files)        the n8n client evidence record from the local store
   status                   what is in the store
 
   --store DIR              where to keep state (default ${STORE_DIR}/)

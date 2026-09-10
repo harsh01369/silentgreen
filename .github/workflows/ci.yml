@@ -37,7 +37,9 @@ jobs:
           node -e 'const j=require("./cr.json"); if(!j.contract||j.contract.pipeline!=="ci") throw new Error("contract not in report")'
           npm run --silent dev -- inspect ci-demo.jsonl --task task-004 --json > in.json
           node -e 'const j=require("./in.json")[0]; if(j.segments.map(s=>s.text).join("")!==j.answer) throw new Error("inspect segments do not reassemble"); if(j.counts.ungrounded!==4) throw new Error("inspect ungrounded count changed: "+j.counts.ungrounded)'
-          rm -f ci-demo.jsonl ci.sg.yaml report.json cr.json in.json
+          npm run --silent dev -- report ci-demo.jsonl --contract ci.sg.yaml --out ev.html
+          node -e 'const h=require("fs").readFileSync("ev.html","utf8"); if(!/silentgreen evidence record/.test(h)) throw new Error("evidence record not rendered"); if(/<script(?![^>]*application\/json)/.test(h)) throw new Error("evidence record has a script tag"); if(/£742\.60|finance@fernweh/.test(h)) throw new Error("redacted report leaked a value")'
+          rm -f ci-demo.jsonl ci.sg.yaml report.json cr.json in.json ev.html
 
       - name: build
         run: npm run build
