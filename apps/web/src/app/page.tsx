@@ -318,7 +318,7 @@ function CTA() {
       <div className="mx-auto max-w-5xl px-6 py-24 text-center sm:py-32">
         <Reveal>
           <h2 className="mx-auto max-w-[20ch] font-display text-3xl font-medium leading-tight tracking-[-0.01em] text-ink sm:text-[2.8rem]">
-            Run it on a Tuesday. See what it catches.
+            Point it at the last batch you shipped. See what it catches.
           </h2>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <code className="panel-sunken rounded-xl px-4 py-3 font-mono text-[13px] text-ink">
